@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+target/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Build output
+dist/
+build/
+.next/
+src-tauri/target/
+
+# Environment
+.env
+.env.local
+*.local
+
+# IDE / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Claude
+.claude/settings.local.json
+.claude/local/
