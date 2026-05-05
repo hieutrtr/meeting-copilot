@@ -1,0 +1,10 @@
+[package]
+name = "helper-daemon"
+version = "0.0.0"
+description = "Meeting Copilot helper daemon — Phase 1 T-1.2 scaffold (in-process Rust crate; out-of-process RPC deferred to Phase 1.x)."
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "helper_daemon"
+path = "src/lib.rs"

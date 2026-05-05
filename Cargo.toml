@@ -1,0 +1,21 @@
+# Virtual Cargo workspace for Meeting Copilot.
+# Phase 1 T-1.2 — adds the first member crates (`src-tauri`, `crates/helper-daemon`).
+# Shape mirrors the upstream Tauri 2 monorepo template: `[workspace]` only at root,
+# every crate keeps its own `[package]`.
+
+[workspace]
+resolver = "2"
+members = [
+    "src-tauri",
+    "crates/helper-daemon",
+]
+
+[profile.dev]
+incremental = true
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

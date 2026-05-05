@@ -1,17 +1,22 @@
-// experimental, not for prod — Phase 0 T-0.8 scaffold.
-// IPC smoke test: a single `greet` command. Frontend in src/App.tsx calls
-// `invoke<string>("greet", { name })`. Phase 1 (T-1.1+) replaces this with
-// real audio-capture daemon RPC per ARCH §8.2.
+// Phase 0 (T-0.8) shipped a `greet` IPC smoke command — kept as a regression baseline.
+// Phase 1 T-1.2 adds `ping`, the new liveness command that delegates to the
+// helper-daemon crate (per ARCH App A `crates/helper-daemon`). Real audio /
+// meeting-state commands land in T-1.3 .. T-1.9.
 
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello {name}, from Tauri!")
 }
 
+#[tauri::command]
+fn ping() -> String {
+    helper_daemon::ping().to_string()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![greet, ping])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -28,5 +33,15 @@ mod tests {
     #[test]
     fn greet_handles_empty_name() {
         assert_eq!(greet(""), "Hello , from Tauri!");
+    }
+
+    #[test]
+    fn ping_command_returns_pong() {
+        assert_eq!(ping(), "pong");
+    }
+
+    #[test]
+    fn ping_delegates_to_daemon() {
+        assert_eq!(ping(), helper_daemon::ping());
     }
 }
