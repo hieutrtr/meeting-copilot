@@ -1,0 +1,17 @@
+[run] 2026-05-05T11:55:45Z
+[run] duration=5s wav=/Users/hieutran/projects/bridge-bot-ts-1/meeting-copilot/experiments/T-0.1/out/mic.wav metrics=/Users/hieutran/projects/bridge-bot-ts-1/meeting-copilot/experiments/T-0.1/out/metrics.json
+[run] swiftc -O /Users/hieutran/projects/bridge-bot-ts-1/meeting-copilot/experiments/T-0.1/mic_capture.swift -o /Users/hieutran/projects/bridge-bot-ts-1/meeting-copilot/experiments/T-0.1/out/mic_capture
+[run] /Users/hieutran/projects/bridge-bot-ts-1/meeting-copilot/experiments/T-0.1/out/mic_capture 5 /Users/hieutran/projects/bridge-bot-ts-1/meeting-copilot/experiments/T-0.1/out/mic.wav /Users/hieutran/projects/bridge-bot-ts-1/meeting-copilot/experiments/T-0.1/out/metrics.json
+[boot] mic_capture starting (duration=5.0s, wav=/Users/hieutran/projects/bridge-bot-ts-1/meeting-copilot/experiments/T-0.1/out/mic.wav)
+[tcc] mic authorization status: notDetermined
+[error] microphone TCC status is 'notDetermined' — capture will not work in headless mode
+[hint] grant Microphone access to the parent terminal in System Settings → Privacy & Security → Microphone, then re-run
+[run] swift exit=6
+--- metrics.json ---
+{
+  "duration_seconds_requested" : 5,
+  "error" : "tcc_not_authorized",
+  "hint" : "Microphone permission not granted (status='notDetermined'). Grant the parent terminal Microphone access in System Settings → Privacy & Security → Microphone, then re-run. If status is 'notDetermined', running this binary once interactively from a GUI terminal will surface the macOS permission prompt.",
+  "ok" : false,
+  "tcc_status" : "notDetermined"
+}

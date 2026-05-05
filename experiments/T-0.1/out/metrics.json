@@ -1,0 +1,7 @@
+{
+  "duration_seconds_requested" : 5,
+  "error" : "tcc_not_authorized",
+  "hint" : "Microphone permission not granted (status='notDetermined'). Grant the parent terminal Microphone access in System Settings → Privacy & Security → Microphone, then re-run. If status is 'notDetermined', running this binary once interactively from a GUI terminal will surface the macOS permission prompt.",
+  "ok" : false,
+  "tcc_status" : "notDetermined"
+}
