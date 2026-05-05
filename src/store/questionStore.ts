@@ -1,9 +1,12 @@
 // Phase 1 T-1.9 — manual-marked question store.
+// Phase 2 T-2.6 — `markAuto` companion for the queue worker (`method: "auto"`).
 //
-// `markFromChunks` is the demo's single mark surface (per loop INDEX): grab the
-// last N transcript chunks, join them with a single space, and push a Question
-// onto the front of the list. T-1.10's Claude client reads `questions[0]` to
-// build the next streaming Q/A turn.
+// `markFromChunks` is the manual surface (US-12): grab the last N transcript
+// chunks, join them with a single space, prepend a Question with
+// `method: "manual"`. `markAuto` is the auto-detector surface (US-04): the
+// worker (T-2.6) calls it with the assembled utterance text + the Haiku
+// verdict's confidence score. Both flows prepend onto `questions[0]` so the
+// existing T-1.10 Q/A render pipeline picks the newest one verbatim.
 //
 // Newest-first ordering matches PRD §7.2 sidebar wireframe. Persistence wiring
 // lands in T-1.12; this slice is in-memory only for MVP.
@@ -21,12 +24,20 @@ export interface MarkOptions {
   id?: string;
 }
 
+export interface MarkAutoOptions {
+  meetingId?: string;
+  detectedTs?: number;
+  confidence?: number;
+  id?: string;
+}
+
 export interface QuestionState {
   questions: Question[];
   markFromChunks: (
     chunks: TranscriptChunk[],
     opts?: MarkOptions,
   ) => Question | null;
+  markAuto: (text: string, opts?: MarkAutoOptions) => Question | null;
   clear: () => void;
 }
 
@@ -61,6 +72,30 @@ export const useQuestionStore = create<QuestionState>((set) => ({
       method: opts?.method ?? "manual",
       status: "open",
     };
+
+    set((s) => ({ questions: [question, ...s.questions] }));
+    return question;
+  },
+  markAuto: (text, opts) => {
+    if (!text || text.length === 0) return null;
+
+    const meetingIdFromStore = useMeetingStore.getState().meetingId;
+    const meetingId = opts?.meetingId ?? meetingIdFromStore ?? "unknown";
+    // Auto path stamps detectedTs at utterance.endTs (caller's responsibility);
+    // when omitted we fall back to "now" so the chip still has a sortable time.
+    const detectedTs = opts?.detectedTs ?? Date.now();
+
+    const question: Question = {
+      id: opts?.id ?? generateQuestionId(),
+      meetingId,
+      text,
+      detectedTs,
+      method: "auto",
+      status: "open",
+    };
+    if (typeof opts?.confidence === "number") {
+      question.confidence = opts.confidence;
+    }
 
     set((s) => ({ questions: [question, ...s.questions] }));
     return question;

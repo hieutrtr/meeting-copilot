@@ -131,3 +131,87 @@ describe("useQuestionStore.markFromChunks", () => {
     expect(useQuestionStore.getState().questions).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 2 T-2.6 — markAuto (auto-detector path; mirror of markFromChunks shape).
+// ---------------------------------------------------------------------------
+
+describe("useQuestionStore.markAuto", () => {
+  it("MA-S1: empty text returns null and leaves the list untouched", () => {
+    const result = useQuestionStore.getState().markAuto("");
+    expect(result).toBeNull();
+    expect(useQuestionStore.getState().questions).toHaveLength(0);
+  });
+
+  it("MA-S2: prepends a Question with method='auto' + status='open'", () => {
+    useMeetingStore.getState().start({ meetingId: "m-42", now: 0 });
+
+    const q = useQuestionStore
+      .getState()
+      .markAuto("what's the deadline?", { detectedTs: 12_345 });
+
+    expect(q).not.toBeNull();
+    expect(q!.text).toBe("what's the deadline?");
+    expect(q!.method).toBe("auto");
+    expect(q!.status).toBe("open");
+    expect(q!.detectedTs).toBe(12_345);
+    expect(q!.meetingId).toBe("m-42");
+    expect(useQuestionStore.getState().questions).toHaveLength(1);
+  });
+
+  it("MA-S3: confidence opt is propagated onto the Question (Haiku verdict score)", () => {
+    useMeetingStore.getState().start({ meetingId: "m-42", now: 0 });
+
+    const q = useQuestionStore
+      .getState()
+      .markAuto("explain the cache layout", { confidence: 0.9 });
+
+    expect(q!.confidence).toBe(0.9);
+  });
+
+  it("MA-S4: meetingId opt overrides the store value; falls back to 'unknown' when neither is set", () => {
+    useMeetingStore.getState().start({ meetingId: "m-store", now: 0 });
+
+    const q1 = useQuestionStore
+      .getState()
+      .markAuto("text", { meetingId: "m-explicit" });
+    expect(q1!.meetingId).toBe("m-explicit");
+
+    useMeetingStore.getState().reset();
+    const q2 = useQuestionStore.getState().markAuto("text2");
+    expect(q2!.meetingId).toBe("unknown");
+  });
+
+  it("MA-S5: markFromChunks then markAuto → both questions land newest-first", () => {
+    useMeetingStore.getState().start({ meetingId: "m-42", now: 0 });
+
+    useQuestionStore
+      .getState()
+      .markFromChunks([chunk(0, "manual-q")], { lastN: 1 });
+    useQuestionStore
+      .getState()
+      .markAuto("auto-q", { detectedTs: 9_999 });
+
+    const list = useQuestionStore.getState().questions;
+    expect(list).toHaveLength(2);
+    expect(list[0]!.text).toBe("auto-q");
+    expect(list[0]!.method).toBe("auto");
+    expect(list[1]!.text).toBe("manual-q");
+    expect(list[1]!.method).toBe("manual");
+  });
+
+  it("MA-S6: caller-provided id is used verbatim", () => {
+    const q = useQuestionStore
+      .getState()
+      .markAuto("text", { id: "fixed-id-1", meetingId: "m" });
+    expect(q!.id).toBe("fixed-id-1");
+  });
+
+  it("MA-S7: confidence omitted → no confidence field on Question (avoid 'undefined' leak)", () => {
+    const q = useQuestionStore
+      .getState()
+      .markAuto("text", { meetingId: "m" });
+    expect(q!.confidence).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(q!, "confidence")).toBe(false);
+  });
+});
