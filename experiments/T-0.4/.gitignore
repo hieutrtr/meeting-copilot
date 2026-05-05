@@ -1,0 +1,7 @@
+# experimental, not for prod
+.venv/
+out/samples/
+out/runs/
+out/raw_text/
+out/run.log
+__pycache__/
