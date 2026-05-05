@@ -15,3 +15,7 @@ stt-mlx = { path = "../stt-mlx", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
+# T-1.12 — SQLite persistence per ARCH §10. `bundled` vendors libsqlite3 so the
+# build env doesn't need a system libsqlite-dev (macOS dev hosts already have cc
+# from Xcode CLT — Phase 0 T-0.8 prerequisite). Plugin-sql is deferred to Phase 1.x.
+rusqlite = { version = "0.31", features = ["bundled"] }
