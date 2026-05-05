@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the main Meeting Copilot window. Grants core Tauri 2 permissions required for invoke()/event IPC. Phase 1 narrows this per ARCH §11 security model.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}

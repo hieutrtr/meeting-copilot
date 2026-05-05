@@ -1,0 +1,50 @@
+.container {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem;
+}
+
+.subtitle {
+  color: #6b6b6b;
+  margin-top: -0.5rem;
+}
+
+.ipc-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  background: white;
+}
+
+.ipc-card input {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  font: inherit;
+}
+
+.ipc-card button {
+  padding: 0.5rem 0.9rem;
+  border: 0;
+  border-radius: 4px;
+  background: #2962ff;
+  color: white;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ipc-card .reply {
+  padding: 0.5rem 0.6rem;
+  background: #eaf2ff;
+  border-left: 3px solid #2962ff;
+  border-radius: 2px;
+  margin: 0;
+}
+
+.ipc-card .error {
+  color: #c62828;
+  margin: 0;
+}

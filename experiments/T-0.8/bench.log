@@ -1,0 +1,101 @@
+[T-0.8] starting at 2026-05-05T13:02:53Z
+[T-0.8] root=/Users/hieutran/projects/bridge-bot-ts-1/meeting-copilot
+[probe] bun:   1.3.11
+[probe] cargo: (missing)
+[probe] rustc: (missing)
+
+[step 1/4] structural verifier (verify.ts)
+  [ok ] AC-1a/package.json exists  // path=package.json
+  [ok ] AC-1b/index.html exists  // path=index.html
+  [ok ] AC-1c/vite.config.ts exists  // path=vite.config.ts
+  [ok ] AC-1d/tsconfig.json exists  // path=tsconfig.json
+  [ok ] AC-1e/src/ exists  // path=src
+  [ok ] AC-1f/src/main.tsx exists  // path=src/main.tsx
+  [ok ] AC-1g/src/App.tsx exists  // path=src/App.tsx
+  [ok ] AC-1h/src-tauri/ exists  // path=src-tauri
+  [ok ] AC-1i/Cargo.toml exists  // path=src-tauri/Cargo.toml
+  [ok ] AC-1j/build.rs exists  // path=src-tauri/build.rs
+  [ok ] AC-1k/tauri.conf.json exists  // path=src-tauri/tauri.conf.json
+  [ok ] AC-1l/src-tauri/src/main.rs exists  // path=src-tauri/src/main.rs
+  [ok ] AC-1m/src-tauri/src/lib.rs exists  // path=src-tauri/src/lib.rs
+  [ok ] AC-1n/capabilities/default.json exists  // path=src-tauri/capabilities/default.json
+  [ok ] AC-1o/icons/icon.png exists  // path=src-tauri/icons/icon.png
+  [ok ] AC-2a/package.json valid JSON  // parsed
+  [ok ] AC-2b/dep @tauri-apps/api
+  [ok ] AC-2c/dep react
+  [ok ] AC-2d/dep react-dom
+  [ok ] AC-2e/devDep @tauri-apps/cli
+  [ok ] AC-2f/devDep vite
+  [ok ] AC-2g/devDep @vitejs/plugin-react
+  [ok ] AC-2h/script tauri
+  [ok ] AC-3a/Cargo.toml tauri@2  // pattern=/^\s*tauri\s*=\s*\{[^}]*version\s*=\s*"2"/m -> match
+  [ok ] AC-3b/Cargo.toml tauri-build@2  // pattern=/^\s*tauri-build\s*=\s*\{[^}]*version\s*=\s*"2"/m -> match
+  [ok ] AC-3c/Cargo.toml serde dep  // pattern=/^\s*serde\s*=/m -> match
+  [ok ] AC-3d/Cargo.toml lib.crate-type contains cdylib  // pattern=/crate-type\s*=\s*\[[^\]]*"cdylib"/m -> match
+  [ok ] AC-4a/tauri.conf.json valid JSON  // parsed
+  [ok ] AC-4b/identifier set  // dev.hieutran.meeting-copilot
+  [ok ] AC-4c/build.devUrl points at vite  // http://localhost:1420
+  [ok ] AC-4d/build.beforeDevCommand uses bun  // bun run dev
+  [ok ] AC-4e/build.frontendDist = ../dist  // ../dist
+  [ok ] AC-4f/window 'main' declared  // {"label":"main","title":"Meeting Copilot","width":800,"height":600,"resizable":true,"fullscreen":false}
+  [ok ] AC-5a/lib.rs greet command  // pattern=/#\[tauri::command\]\s*\nfn\s+greet\s*\(/m -> match
+  [ok ] AC-5b/lib.rs greet registered in invoke_handler  // pattern=/generate_handler!\[\s*greet\s*\]/ -> match
+  [ok ] AC-5c/App.tsx imports invoke  // pattern=/import\s*\{\s*invoke\s*\}\s*from\s*["']@tauri-apps\/api\/core["']/ -> match
+  [ok ] AC-5d/App.tsx calls invoke('greet', { name })  // pattern=/invoke<string>\s*\(\s*["']greet["']\s*,\s*\{\s*name\s*\}/ -> match
+  [ok ] AC-5e/capability JSON valid  // parsed
+  [ok ] AC-5f/capability windows includes 'main'  // ["main"]
+  [ok ] AC-5g/capability permission core:default  // ["core:default"]
+
+[verify] 40/40 structural checks passed.
+[step 1/4] OK
+
+[step 2/4] bun install (ACs 2)
+bun install v1.3.11 (af24e281)
+Resolving dependencies
+Resolved, downloaded and extracted [290]
+Saved lockfile
+
++ @tauri-apps/cli@2.11.0
++ @types/react@18.3.28 (v19.2.14 available)
++ @types/react-dom@18.3.7 (v19.2.3 available)
++ @vitejs/plugin-react@4.7.0 (v6.0.1 available)
++ typescript@5.9.3 (v6.0.3 available)
++ vite@5.4.21 (v8.0.10 available)
++ @tauri-apps/api@2.11.0
++ react@18.3.1 (v19.2.5 available)
++ react-dom@18.3.1 (v19.2.5 available)
+
+71 packages installed [2.69s]
+[step 2/4] OK
+
+[step 3/4] bun run dev — boot Vite, expect 'Local:' log line within 10s (AC-8)
+[step 3/4] Vite booted — pid=7435
+  VITE v5.4.21  ready in 1099 ms
+  ➜  Local:   http://localhost:1420/
+
+[step 4/4] cargo tauri dev — AC-7
+
+[BLOCKED] cargo / rustc not installed.
+
+  AC-7 (cargo tauri dev opens window) is the only AC remaining.
+  Structural ACs 1..5 + AC-2 bun deps + AC-8 Vite boot all PASSED.
+
+  To unblock AC-7 numerically:
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    source "$HOME/.cargo/env"
+    rustup default stable
+    cargo install tauri-cli --version "^2"
+
+  Then re-run: ./experiments/T-0.8/run.sh
+
+  Result: CAVEAT-GO BLOCKED-PENDING-INSTALL (mirrors T-0.2 BlackHole + T-0.5 API key patterns).
+$ vite build
+vite v5.4.21 building for production...
+transforming...
+✓ 34 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.40 kB │ gzip:  0.27 kB
+dist/assets/index-B78pstTQ.css    0.72 kB │ gzip:  0.37 kB
+dist/assets/index-dt_pW4Gq.js   143.50 kB │ gzip: 46.15 kB
+✓ built in 302ms
