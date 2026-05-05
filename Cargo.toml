@@ -9,6 +9,7 @@ members = [
     "src-tauri",
     "crates/helper-daemon",
     "crates/audio-capture",
+    "crates/stt-mlx",
 ]
 
 [profile.dev]

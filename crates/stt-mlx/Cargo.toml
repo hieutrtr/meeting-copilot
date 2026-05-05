@@ -1,0 +1,23 @@
+[package]
+name = "stt-mlx"
+version = "0.0.0"
+description = "Meeting Copilot STT adapter — Phase 1 T-1.5 (MLX whisper subprocess + FakeStt behind SttProvider trait)."
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "stt_mlx"
+path = "src/lib.rs"
+
+[features]
+default = ["mlx-runtime"]
+# Compiles the MLX subprocess module + tests. Disable for headless CI where Python
+# is not installed; the trait + FakeStt remain available.
+mlx-runtime = []
+
+[dependencies]
+audio-capture = { path = "../audio-capture" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+hound = "3.5"
