@@ -1,0 +1,112 @@
+{
+  "_doc": "Phase 2 T-2.2 — 1-minute synthetic chunked-transcript fixture for the sliding-window utterance assembler. 14 raw chunks → 10 ground-truth utterances. Boundary mix: 4 single-final-chunk utterances (Rule 2 punctuation), 4 multi-chunk utterances (interim partial then final, Rule 2 punctuation closes), 1 single final chunk that ends WITHOUT sentence-terminating punctuation (Rule 1 silence-gap closes via the next utterance's first chunk arrival), 1 multi-chunk closing utterance. All inter-utterance silence gaps ≥ 800 ms; intra-utterance gaps = 0 ms. AC gate: ≥ 80 % boundary correctness (matches/10) per docs/IMPLEMENTATION-PLAN.md row T-2.2.",
+
+  "chunks": [
+    { "id": "c1",  "meetingId": "m-fix", "text": "Hello everyone, welcome to today's standup.", "startTs": 0,     "endTs": 3000,  "isFinal": true  },
+
+    { "id": "c2",  "meetingId": "m-fix", "text": "Today's agenda is",                            "startTs": 4000,  "endTs": 5500,  "isFinal": false },
+    { "id": "c3",  "meetingId": "m-fix", "text": "product roadmap, hiring update, and Q4 OKRs.", "startTs": 5500,  "endTs": 7500,  "isFinal": true  },
+
+    { "id": "c4",  "meetingId": "m-fix", "text": "What is the",                                  "startTs": 8500,  "endTs": 9700,  "isFinal": false },
+    { "id": "c5",  "meetingId": "m-fix", "text": "deadline for the milestone?",                  "startTs": 9700,  "endTs": 11000, "isFinal": true  },
+
+    { "id": "c6",  "meetingId": "m-fix", "text": "Sales team will give the update first, please listen.", "startTs": 11900, "endTs": 14500, "isFinal": true },
+
+    { "id": "c7",  "meetingId": "m-fix", "text": "Bạn nghĩ sao về kế hoạch này?",                "startTs": 15500, "endTs": 18000, "isFinal": true  },
+
+    { "id": "c8",  "meetingId": "m-fix", "text": "Engineering shipped two features last week.",  "startTs": 19000, "endTs": 21500, "isFinal": true  },
+
+    { "id": "c9",  "meetingId": "m-fix", "text": "Can you walk us",                              "startTs": 22500, "endTs": 24200, "isFinal": false },
+    { "id": "c10", "meetingId": "m-fix", "text": "through the metrics please.",                  "startTs": 24200, "endTs": 26000, "isFinal": true  },
+
+    { "id": "c11", "meetingId": "m-fix", "text": "Tại sao chúng ta chưa hoàn thành sprint?",      "startTs": 27000, "endTs": 30000, "isFinal": true  },
+
+    { "id": "c12", "meetingId": "m-fix", "text": "We will discuss budget after the lunch break ok", "startTs": 31000, "endTs": 34000, "isFinal": true },
+
+    { "id": "c13", "meetingId": "m-fix", "text": "Any questions before",                          "startTs": 35000, "endTs": 37000, "isFinal": false },
+    { "id": "c14", "meetingId": "m-fix", "text": "we wrap up?",                                   "startTs": 37000, "endTs": 39000, "isFinal": true  }
+  ],
+
+  "groundTruth": [
+    {
+      "_id": "U1",
+      "text": "Hello everyone, welcome to today's standup.",
+      "startTs": 0,
+      "endTs": 3000,
+      "chunkIds": ["c1"],
+      "trigger": "rule-2 final-with-punctuation (.)"
+    },
+    {
+      "_id": "U2",
+      "text": "Today's agenda is product roadmap, hiring update, and Q4 OKRs.",
+      "startTs": 4000,
+      "endTs": 7500,
+      "chunkIds": ["c2", "c3"],
+      "trigger": "rule-2 final-with-punctuation (.) on c3 — interim c2 accumulates"
+    },
+    {
+      "_id": "U3",
+      "text": "What is the deadline for the milestone?",
+      "startTs": 8500,
+      "endTs": 11000,
+      "chunkIds": ["c4", "c5"],
+      "trigger": "rule-2 final-with-punctuation (?)"
+    },
+    {
+      "_id": "U4",
+      "text": "Sales team will give the update first, please listen.",
+      "startTs": 11900,
+      "endTs": 14500,
+      "chunkIds": ["c6"],
+      "trigger": "rule-2 final-with-punctuation (.)"
+    },
+    {
+      "_id": "U5",
+      "text": "Bạn nghĩ sao về kế hoạch này?",
+      "startTs": 15500,
+      "endTs": 18000,
+      "chunkIds": ["c7"],
+      "trigger": "rule-2 final-with-punctuation (?) — Vietnamese"
+    },
+    {
+      "_id": "U6",
+      "text": "Engineering shipped two features last week.",
+      "startTs": 19000,
+      "endTs": 21500,
+      "chunkIds": ["c8"],
+      "trigger": "rule-2 final-with-punctuation (.)"
+    },
+    {
+      "_id": "U7",
+      "text": "Can you walk us through the metrics please.",
+      "startTs": 22500,
+      "endTs": 26000,
+      "chunkIds": ["c9", "c10"],
+      "trigger": "rule-2 final-with-punctuation (.) on c10"
+    },
+    {
+      "_id": "U8",
+      "text": "Tại sao chúng ta chưa hoàn thành sprint?",
+      "startTs": 27000,
+      "endTs": 30000,
+      "chunkIds": ["c11"],
+      "trigger": "rule-2 final-with-punctuation (?) — Vietnamese"
+    },
+    {
+      "_id": "U9",
+      "text": "We will discuss budget after the lunch break ok",
+      "startTs": 31000,
+      "endTs": 34000,
+      "chunkIds": ["c12"],
+      "trigger": "rule-1 silence-gap (1000 ms ≥ 800 ms) — closes when c13 arrives. Tests no-punctuation final."
+    },
+    {
+      "_id": "U10",
+      "text": "Any questions before we wrap up?",
+      "startTs": 35000,
+      "endTs": 39000,
+      "chunkIds": ["c13", "c14"],
+      "trigger": "rule-2 final-with-punctuation (?) on c14"
+    }
+  ]
+}

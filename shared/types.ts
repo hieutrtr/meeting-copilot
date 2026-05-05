@@ -65,3 +65,13 @@ export interface ContextSource {
   estimatedTokens: number;
   loadedAt: number;
 }
+
+// Phase 2 T-2.2 — Sliding-window utterance assembled from one or more
+// `TranscriptChunk` events. The detector pipeline (T-2.1 heuristic → T-2.3
+// Haiku filter) classifies whole utterances, not raw chunks.
+export interface Utterance {
+  text: string;
+  startTs: number;
+  endTs: number;
+  chunkIds: string[];
+}
