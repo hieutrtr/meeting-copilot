@@ -1,0 +1,14 @@
+{
+  "name": "t-0.5-claude-streaming-cache",
+  "private": true,
+  "type": "module",
+  "description": "Phase 0 spike T-0.5 — Claude Sonnet 4.6 streaming + prompt cache benchmark. EXPERIMENTAL, NOT FOR PROD.",
+  "scripts": {
+    "test": "bun test tests",
+    "test:structural": "bun test tests/request-shape.test.ts tests/pricing.test.ts",
+    "bench": "bun run scripts/run-bench.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.40.0"
+  }
+}

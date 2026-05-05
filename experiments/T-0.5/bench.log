@@ -1,0 +1,11 @@
+{
+  "status": "BLOCKED-PENDING-KEY",
+  "exit_code": 12,
+  "reason": "ANTHROPIC_API_KEY env var is not set; per Phase 0 INDEX §'Toolchain Prerequisites' T-0.5 must STOP and surface a notice rather than silently skip.",
+  "remediation": [
+    "1. Obtain an Anthropic API key (https://console.anthropic.com/).",
+    "2. Export in shell: export ANTHROPIC_API_KEY=\"sk-ant-...\"",
+    "3. Re-run: ./run.sh"
+  ],
+  "timestamp": "2026-05-05T12:46:06.618Z"
+}
