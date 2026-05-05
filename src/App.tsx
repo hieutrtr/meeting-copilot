@@ -1,12 +1,48 @@
+import { useEffect, useMemo } from "react";
+
 import "./App.css";
 
+import { AnswerPanel } from "./components/AnswerPanel";
 import { ContextLoader } from "./components/ContextLoader";
 import { MeetingControls } from "./components/MeetingControls";
 import { TranscriptView } from "./components/TranscriptView";
 import { useTranscriptStream } from "./hooks/useTranscriptStream";
+import { useAskClaude } from "./hooks/useAskClaude";
+import { useContextStore } from "./store/contextStore";
+import { useQuestionStore } from "./store/questionStore";
+
+const RECENT_TRANSCRIPT_CHUNK_COUNT = 12;
 
 export default function App() {
   const { chunks } = useTranscriptStream();
+  const contextContent = useContextStore((s) => s.content);
+  const latestQuestion = useQuestionStore((s) => s.questions[0] ?? null);
+  const { status, text, error, usage, costUsd, cacheReadRatio, ask } = useAskClaude();
+
+  const recentTranscript = useMemo(
+    () =>
+      chunks
+        .slice(-RECENT_TRANSCRIPT_CHUNK_COUNT)
+        .map((c) => c.text)
+        .join(" "),
+    [chunks],
+  );
+
+  // When a fresh question lands, kick off a Claude stream. The hook owns
+  // cancellation: a second `ask()` cancels the prior in-flight generator.
+  useEffect(() => {
+    if (!latestQuestion) return;
+    if (!contextContent) return;
+    ask({
+      question: latestQuestion.text,
+      contextDoc: contextContent,
+      recentTranscript,
+    });
+    // We deliberately key the effect on the question ID only — `recentTranscript`
+    // changes each chunk, but we want to fire once per marked question. The
+    // transcript-snapshot in scope at fire time is the right one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latestQuestion?.id, contextContent]);
 
   return (
     <main className="container">
@@ -16,6 +52,14 @@ export default function App() {
       <ContextLoader />
       <MeetingControls chunks={chunks} />
       <TranscriptView chunks={chunks} />
+      <AnswerPanel
+        status={status}
+        text={text}
+        error={error}
+        usage={usage}
+        costUsd={costUsd}
+        cacheReadRatio={cacheReadRatio}
+      />
     </main>
   );
 }
