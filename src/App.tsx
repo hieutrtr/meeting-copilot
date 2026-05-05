@@ -5,9 +5,11 @@ import "./App.css";
 import { AnswerPanel } from "./components/AnswerPanel";
 import { ContextLoader } from "./components/ContextLoader";
 import { MeetingControls } from "./components/MeetingControls";
+import { PastMeetings } from "./components/PastMeetings";
 import { TranscriptView } from "./components/TranscriptView";
 import { useTranscriptStream } from "./hooks/useTranscriptStream";
 import { useAskClaude } from "./hooks/useAskClaude";
+import { useMeetingPersist } from "./hooks/useMeetingPersist";
 import { useContextStore } from "./store/contextStore";
 import { useQuestionStore } from "./store/questionStore";
 
@@ -27,6 +29,22 @@ export default function App() {
         .join(" "),
     [chunks],
   );
+
+  // T-1.13 — Stop→persist + hydrate-on-open.
+  // The hook reads `useMeetingStore.status` internally and fires once when it
+  // flips to "ended". `answer` is the last streamed Claude output (if any).
+  useMeetingPersist({
+    chunks,
+    answer:
+      status === "done" || status === "streaming"
+        ? {
+            text,
+            tokensIn: usage?.input_tokens,
+            tokensOut: usage?.output_tokens,
+            cachedRatio: cacheReadRatio,
+          }
+        : null,
+  });
 
   // When a fresh question lands, kick off a Claude stream. The hook owns
   // cancellation: a second `ask()` cancels the prior in-flight generator.
@@ -60,6 +78,7 @@ export default function App() {
         costUsd={costUsd}
         cacheReadRatio={cacheReadRatio}
       />
+      <PastMeetings />
     </main>
   );
 }

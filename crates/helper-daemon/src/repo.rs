@@ -116,6 +116,23 @@ pub struct ContextSourceRow {
     pub loaded_at: i64,
 }
 
+/// T-1.13 — Bundled snapshot for the Stop→persist flow. Mirrors the
+/// `MeetingSnapshot` interface in `src/persist/persistClient.ts`.
+/// Optional fields preserve the demo behaviour that "context" and "answer"
+/// may legitimately be absent (e.g. the user clicked Stop before marking a
+/// question, so no answer rendered).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingSnapshot {
+    pub meeting: MeetingRow,
+    pub chunks: Vec<TranscriptChunkRow>,
+    pub questions: Vec<QuestionRow>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub answer: Option<AnswerRow>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub context_source: Option<ContextSourceRow>,
+}
+
 /// Idempotent schema DDL. Re-running on an existing database is a no-op
 /// (the `IF NOT EXISTS` clauses + the absence of `ALTER TABLE` here).
 /// First migration (Phase 1.x) lands when this DDL needs to evolve.
@@ -503,6 +520,108 @@ impl Repo {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
+
+    /// T-1.13 — single-transaction Stop→persist helper. Inserts everything in
+    /// the canonical order (meeting → context + link → chunks → questions →
+    /// answer). On any failure the txn rolls back so we never leave a
+    /// partially-persisted meeting on disk. The Tauri command in `src-tauri`
+    /// is a thin error-stringifying wrapper.
+    pub fn save_meeting_snapshot(&self, snap: &MeetingSnapshot) -> Result<(), RepoError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+
+        tx.execute(
+            "INSERT INTO meetings
+                (id, title, started_at, ended_at, stt_provider, model, privacy_mode, status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                snap.meeting.id,
+                snap.meeting.title,
+                snap.meeting.started_at,
+                snap.meeting.ended_at,
+                snap.meeting.stt_provider,
+                snap.meeting.model,
+                snap.meeting.privacy_mode,
+                snap.meeting.status,
+            ],
+        )?;
+
+        if let Some(ctx) = &snap.context_source {
+            tx.execute(
+                "INSERT OR IGNORE INTO context_sources
+                    (id, path, char_count, estimated_tokens, loaded_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    ctx.id,
+                    ctx.path,
+                    ctx.char_count,
+                    ctx.estimated_tokens,
+                    ctx.loaded_at,
+                ],
+            )?;
+            tx.execute(
+                "INSERT OR IGNORE INTO meeting_context (meeting_id, context_id)
+                 VALUES (?1, ?2)",
+                params![snap.meeting.id, ctx.id],
+            )?;
+        }
+
+        for c in &snap.chunks {
+            tx.execute(
+                "INSERT INTO transcript_chunks
+                    (id, meeting_id, text, start_ts, end_ts, is_final, speaker, confidence)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    c.id,
+                    c.meeting_id,
+                    c.text,
+                    c.start_ts,
+                    c.end_ts,
+                    c.is_final as i32,
+                    c.speaker,
+                    c.confidence,
+                ],
+            )?;
+        }
+
+        for q in &snap.questions {
+            tx.execute(
+                "INSERT INTO questions
+                    (id, meeting_id, text, detected_ts, method, confidence, status)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    q.id,
+                    q.meeting_id,
+                    q.text,
+                    q.detected_ts,
+                    q.method,
+                    q.confidence,
+                    q.status,
+                ],
+            )?;
+        }
+
+        if let Some(a) = &snap.answer {
+            tx.execute(
+                "INSERT INTO answers
+                    (id, question_id, text, generated_at, model, tokens_in, tokens_out, cached_ratio)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    a.id,
+                    a.question_id,
+                    a.text,
+                    a.generated_at,
+                    a.model,
+                    a.tokens_in,
+                    a.tokens_out,
+                    a.cached_ratio,
+                ],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -888,5 +1007,97 @@ mod tests {
         let listed = repo.list_meetings().expect("list");
         assert_eq!(listed[0].id, "m-new");
         assert_eq!(listed[1].id, "m-old");
+    }
+
+    // T-1.13 E1: save_meeting_snapshot inserts every row + the link in one call.
+    #[test]
+    fn save_meeting_snapshot_inserts_everything() {
+        let repo = Repo::open_in_memory().expect("open ok");
+        let snap = MeetingSnapshot {
+            meeting: sample_meeting("m-snap"),
+            chunks: (0..3).map(|i| sample_chunk("m-snap", i)).collect(),
+            questions: vec![sample_question("m-snap")],
+            answer: Some(sample_answer("q-1")),
+            context_source: Some(sample_context()),
+        };
+        repo.save_meeting_snapshot(&snap).expect("save");
+        // every read API reflects the snapshot.
+        assert_eq!(
+            repo.get_meeting("m-snap").expect("get").expect("present"),
+            sample_meeting("m-snap")
+        );
+        let chunks = repo.list_chunks("m-snap").expect("chunks");
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0], sample_chunk("m-snap", 0));
+        let qs = repo.list_questions("m-snap").expect("qs");
+        assert_eq!(qs, vec![sample_question("m-snap")]);
+        let a = repo.get_answer("q-1").expect("a").expect("present");
+        assert_eq!(a, sample_answer("q-1"));
+        let ctxs = repo.list_contexts_for_meeting("m-snap").expect("ctx");
+        assert_eq!(ctxs, vec![sample_context()]);
+    }
+
+    // T-1.13 E2: orphan answer (question_id without a matching question) → txn rolls back.
+    // After the failed save, the meeting must NOT exist (everything reverted).
+    #[test]
+    fn save_meeting_snapshot_rolls_back_on_orphan_answer() {
+        let repo = Repo::open_in_memory().expect("open ok");
+        let mut bad_answer = sample_answer("q-ghost");
+        bad_answer.id = "a-bad".into();
+        let snap = MeetingSnapshot {
+            meeting: sample_meeting("m-bad"),
+            chunks: vec![sample_chunk("m-bad", 0)],
+            questions: vec![],
+            // answer references a question that doesn't exist in the snapshot
+            answer: Some(bad_answer),
+            context_source: None,
+        };
+        let err = repo.save_meeting_snapshot(&snap).expect_err("FK reject");
+        let msg = format!("{err}").to_uppercase();
+        assert!(msg.contains("FOREIGN KEY"), "got: {err}");
+        // Crucially: the meeting + chunk inserts are rolled back.
+        assert_eq!(repo.get_meeting("m-bad").expect("get"), None);
+        assert_eq!(repo.list_chunks("m-bad").expect("chunks"), vec![]);
+    }
+
+    // T-1.13 E3: snapshot with no context_source / no answer is still saved.
+    #[test]
+    fn save_meeting_snapshot_tolerates_optionals_none() {
+        let repo = Repo::open_in_memory().expect("open ok");
+        let snap = MeetingSnapshot {
+            meeting: sample_meeting("m-bare"),
+            chunks: vec![sample_chunk("m-bare", 0)],
+            questions: vec![],
+            answer: None,
+            context_source: None,
+        };
+        repo.save_meeting_snapshot(&snap).expect("save");
+        assert!(repo.get_meeting("m-bare").expect("get").is_some());
+        assert_eq!(repo.list_chunks("m-bare").expect("chunks").len(), 1);
+        // No context, no link.
+        assert_eq!(
+            repo.list_contexts_for_meeting("m-bare").expect("ctx"),
+            vec![]
+        );
+    }
+
+    // T-1.13 E4: re-saving the same meeting.id rejects (PK violation, no silent overwrite).
+    #[test]
+    fn save_meeting_snapshot_duplicate_meeting_rejects() {
+        let repo = Repo::open_in_memory().expect("open ok");
+        let snap = MeetingSnapshot {
+            meeting: sample_meeting("m-dup"),
+            chunks: vec![],
+            questions: vec![],
+            answer: None,
+            context_source: None,
+        };
+        repo.save_meeting_snapshot(&snap).expect("first");
+        let err = repo.save_meeting_snapshot(&snap).expect_err("dup reject");
+        let msg = format!("{err}").to_uppercase();
+        assert!(
+            msg.contains("UNIQUE") || msg.contains("PRIMARY KEY"),
+            "got: {err}"
+        );
     }
 }

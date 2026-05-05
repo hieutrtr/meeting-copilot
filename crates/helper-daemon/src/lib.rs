@@ -17,7 +17,8 @@ pub use bridge::{
 };
 pub use context::{read_context_file, ContextError, ContextFile, ALLOWED_EXTENSIONS};
 pub use repo::{
-    AnswerRow, ContextSourceRow, MeetingRow, QuestionRow, Repo, RepoError, TranscriptChunkRow,
+    AnswerRow, ContextSourceRow, MeetingRow, MeetingSnapshot, QuestionRow, Repo, RepoError,
+    TranscriptChunkRow,
 };
 
 pub fn ping() -> &'static str {
