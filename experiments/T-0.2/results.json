@@ -1,0 +1,22 @@
+{
+  "devices" : [
+    {
+      "id" : 100,
+      "input_channels" : 1,
+      "name" : "MacBook Pro Microphone",
+      "nominal_sample_rate_hz" : 48000,
+      "uid" : "BuiltInMicrophoneDevice"
+    },
+    {
+      "id" : 73,
+      "input_channels" : 2,
+      "name" : "MOTIV Mix Virtual",
+      "nominal_sample_rate_hz" : 48000,
+      "uid" : "ShureVirtualAudioDevice_UID"
+    }
+  ],
+  "duration_seconds_requested" : 5,
+  "error" : "blackhole_not_installed",
+  "hint" : "BlackHole-2ch is not installed (no input device matched 'BlackHole 2ch'). Install: `brew install blackhole-2ch`. After install you may need to allow the system extension in System Settings → Privacy & Security and reboot. Then create a Multi-Output Device in Audio MIDI Setup.app routing system → speakers + BlackHole, set it as system output, play audio, and re-run.",
+  "ok" : false
+}
