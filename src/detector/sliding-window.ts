@@ -36,7 +36,7 @@ export interface SlidingWindow {
   reset(): void;
 }
 
-const DEFAULT_SILENCE_MS = 800;
+export const DEFAULT_SILENCE_MS = 800;
 // Sentence terminator (incl. CJK + ellipsis) optionally followed by a closing
 // quote / bracket. Whitespace tolerated on either side of the closer.
 const DEFAULT_END_PUNCTUATION = /[.!?…。！？]\s*["'’”)\]》」』]?\s*$/;
