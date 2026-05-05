@@ -1,0 +1,15 @@
+[boot] simul_capture starting (mode=parallel, duration=5.0s)
+[probe] all CoreAudio devices: 3 (input-capable: 2)
+[probe]   in 100 name="MacBook Pro Microphone" uid="BuiltInMicrophoneDevice" ch=1 sr=48000.0
+[probe]   in 73 name="MOTIV Mix Virtual" uid="ShureVirtualAudioDevice_UID" ch=2 sr=48000.0
+[error] BlackHole-2ch not found
+[boot] simul_capture starting (mode=aggregate, duration=3.0s)
+[probe] all CoreAudio devices: 3 (input-capable: 2)
+[probe]   in 100 name="MacBook Pro Microphone" uid="BuiltInMicrophoneDevice" ch=1 sr=48000.0
+[probe]   in 73 name="MOTIV Mix Virtual" uid="ShureVirtualAudioDevice_UID" ch=2 sr=48000.0
+[error] Aggregate device 'MeetingCopilot Input' not found among input devices
+[boot] simul_capture starting (mode=parallel, duration=5.0s)
+[probe] all CoreAudio devices: 3 (input-capable: 2)
+[probe]   in 100 name="MacBook Pro Microphone" uid="BuiltInMicrophoneDevice" ch=1 sr=48000.0
+[probe]   in 73 name="MOTIV Mix Virtual" uid="ShureVirtualAudioDevice_UID" ch=2 sr=48000.0
+[error] BlackHole-2ch not found
