@@ -36,6 +36,14 @@ pub enum SttError {
 
     #[error("decode error: {0}")]
     Decode(String),
+
+    /// Configuration / pre-flight error — missing API key, malformed URL, unparseable
+    /// header value, etc. Surfaced before any network IO so callers (settings UI test-
+    /// connection button, factory) can present a typed actionable error rather than an
+    /// opaque transport failure. Phase 3 T-3.2 (Deepgram adapter) introduced this variant;
+    /// T-3.4 (ElevenLabs) and T-3.6 (Settings) reuse it.
+    #[error("config error: {0}")]
+    Config(String),
 }
 
 /// Object-safe trait for any STT engine. `Box<dyn SttProvider>` compiles + is `Send` so the

@@ -21,17 +21,24 @@ use crate::provider::{FakeStt, SttError, SttProvider};
 #[cfg(feature = "mlx-runtime")]
 pub mod mlx;
 
+#[cfg(feature = "deepgram")]
+pub mod deepgram;
+
 #[cfg(feature = "mlx-runtime")]
 pub use mlx::{MlxConfig, MlxWhisperSubprocess};
 
-/// Identifier for an STT provider. Phase 3 T-3.1 ships `Mlx` + `Fake`; T-3.2 adds `Deepgram`,
-/// T-3.4 adds `ElevenLabs`. Variants stay flat (no nested config) so the kind alone can be
-/// serialised into settings (`src/store/settingsStore.ts` v2 schema, T-3.6).
+#[cfg(feature = "deepgram")]
+pub use deepgram::{DeepgramAdapter, DeepgramConfig};
+
+/// Identifier for an STT provider. Phase 3 T-3.1 ships `Mlx` + `Fake`; T-3.2 adds
+/// `Deepgram`; T-3.4 will add `ElevenLabs`. Variants stay flat (no nested config) so the
+/// kind alone can be serialised into settings (`src/store/settingsStore.ts` v2 schema,
+/// T-3.6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProviderKind {
     Mlx,
     Fake,
-    // Deepgram,    — added in T-3.2
+    Deepgram,
     // ElevenLabs,  — added in T-3.4
 }
 
@@ -43,6 +50,7 @@ impl ProviderKind {
         match self {
             ProviderKind::Mlx => "mlx",
             ProviderKind::Fake => "fake",
+            ProviderKind::Deepgram => "deepgram",
         }
     }
 }
@@ -55,6 +63,8 @@ pub enum ProviderConfig {
     #[cfg(feature = "mlx-runtime")]
     Mlx(MlxConfig),
     Fake(FakeConfig),
+    #[cfg(feature = "deepgram")]
+    Deepgram(DeepgramConfig),
 }
 
 /// Construction config for the deterministic in-process `FakeStt`. `fixed_text = None`
@@ -112,13 +122,20 @@ pub fn factory(
             };
             Ok(Box::new(p))
         }
-        // `mlx-runtime` off + `Mlx` requested.
+        #[cfg(feature = "deepgram")]
+        (ProviderKind::Deepgram, ProviderConfig::Deepgram(c)) => {
+            let p = DeepgramAdapter::new(c)?;
+            Ok(Box::new(p))
+        }
+        // Feature-disabled cells: surface as ProviderDisabled so settings UI (T-3.6)
+        // can grey out the picker entry rather than blowing up on a config mismatch.
         #[cfg(not(feature = "mlx-runtime"))]
         (ProviderKind::Mlx, _) => Err(FactoryError::ProviderDisabled(ProviderKind::Mlx)),
-        // Any other combination = programmer error: kind/config variant mismatch.
-        // Only reachable under `mlx-runtime`-on (where the (Mlx, Fake) and (Fake, Mlx) cells
-        // exist); under `mlx-runtime`-off the two arms above are exhaustive.
-        #[cfg(feature = "mlx-runtime")]
+        #[cfg(not(feature = "deepgram"))]
+        (ProviderKind::Deepgram, _) => Err(FactoryError::ProviderDisabled(ProviderKind::Deepgram)),
+        // Catchall: kind/config variant mismatch (programmer error in the call site).
+        // The cfg-gated arms above ensure each ProviderKind has exactly one valid config
+        // pair; this arm only fires when the caller passes a wrong-shaped config.
         (k, _) => Err(FactoryError::ConfigMismatch { kind: k }),
     }
 }
@@ -152,6 +169,8 @@ mod tests {
         // `as_str()` is the persisted settings key — drift here breaks v2 migration in T-3.6.
         assert_eq!(ProviderKind::Mlx.as_str(), "mlx");
         assert_eq!(ProviderKind::Fake.as_str(), "fake");
+        // T-3.2: Deepgram added to picker.
+        assert_eq!(ProviderKind::Deepgram.as_str(), "deepgram");
     }
 
     #[test]
@@ -285,6 +304,29 @@ mod tests {
             .transcribe_chunk(&chunk)
             .expect("transcribe");
         assert_eq!(segs[0].text, "swapped");
+    }
+
+    /// T-3.2 — factory regression for the Deepgram seam. We can't drive a live WS handshake
+    /// without a mock server (covered by `providers::deepgram::tests`), but we *can* assert
+    /// that the construction-time validation surfaces through the factory: a Deepgram config
+    /// with a missing API key must propagate as `FactoryError::Stt(SttError::Config(_))`.
+    /// This proves the `#[from] SttError` plumbing on `FactoryError` works for the new
+    /// variant and that no transformation is sneaking in between adapter and factory.
+    #[cfg(feature = "deepgram")]
+    #[test]
+    fn factory_deepgram_propagates_config_error_when_key_missing() {
+        let cfg = ProviderConfig::Deepgram(DeepgramConfig {
+            api_key: None,
+            url: "ws://127.0.0.1:1/v1/listen".into(),
+            read_drain_timeout: std::time::Duration::from_millis(10),
+        });
+        let err = factory(ProviderKind::Deepgram, cfg).expect_err("missing key must error");
+        match err {
+            FactoryError::Stt(crate::provider::SttError::Config(msg)) => {
+                assert!(msg.contains("DEEPGRAM_API_KEY"));
+            }
+            other => panic!("expected FactoryError::Stt(SttError::Config), got {other:?}"),
+        }
     }
 
     #[cfg(feature = "mlx-runtime")]

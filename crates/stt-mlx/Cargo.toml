@@ -10,10 +10,13 @@ name = "stt_mlx"
 path = "src/lib.rs"
 
 [features]
-default = ["mlx-runtime"]
+default = ["mlx-runtime", "deepgram"]
 # Compiles the MLX subprocess module + tests. Disable for headless CI where Python
 # is not installed; the trait + FakeStt remain available.
 mlx-runtime = []
+# Phase 3 T-3.2 — compiles the Deepgram WebSocket adapter (sync `tungstenite`).
+# Plain `ws://` only in T-3.2; TLS (wss://) lands in T-3.3 alongside reconnect/chaos.
+deepgram = ["dep:tungstenite"]
 
 [dependencies]
 audio-capture = { path = "../audio-capture" }
@@ -21,3 +24,4 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
 hound = "3.5"
+tungstenite = { version = "0.21", optional = true, default-features = false, features = ["handshake"] }
