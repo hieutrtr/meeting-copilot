@@ -9,16 +9,25 @@
 //      helper-daemon (Phase 3 T-3.1) and src-tauri commands (Phase 3 T-3.6 settings UI) call
 //      to swap providers at runtime without restarting the meeting.
 //
-// Phase 3 T-3.2 fills in `Deepgram`; T-3.3 layers reconnect-with-backoff onto the same
-// adapter (additive — no factory signature change); T-3.4 fills in `ElevenLabs`. T-3.1's
-// job is the trait extraction + factory pattern + carry-forward Phase 1/2 cargo test
-// green. **Behavior of existing adapters (MLX + Fake) is unchanged** — relocation +
-// factory wiring only.
+// Phase 3 T-3.2 filled in `Deepgram`; T-3.3 layered reconnect-with-backoff onto the same
+// adapter (additive — no factory signature change); T-3.4 fills in `ElevenLabs` (Scribe
+// streaming over WebSocket, `xi-api-key` header, reuses `BackoffConfig`). T-3.1's
+// job was the trait extraction + factory pattern + carry-forward Phase 1/2 cargo test
+// green. **Behavior of existing adapters (MLX + Fake + Deepgram) is unchanged** —
+// the T-3.4 patch is purely additive: a new module, a new `ProviderKind` variant, a
+// new `ProviderConfig` payload, two new factory match arms.
 //
 // ARCH refs: §3 "STT — Pluggable Provider" (3.1 interface, 3.2 default = MLX, 3.3 alternates
 // = Deepgram / ElevenLabs Scribe).
 
 use crate::provider::{FakeStt, SttError, SttProvider};
+
+// `backoff` is feature-ungated — it's pure (stdlib only) and shared by every streaming-WS
+// adapter (T-3.2 Deepgram, T-3.4 ElevenLabs). A future MLX-streaming or Whisper-cloud
+// adapter would reuse the same `BackoffConfig` shape without dragging in another
+// transport feature flag.
+pub mod backoff;
+pub use backoff::BackoffConfig;
 
 #[cfg(feature = "mlx-runtime")]
 pub mod mlx;
@@ -26,14 +35,20 @@ pub mod mlx;
 #[cfg(feature = "deepgram")]
 pub mod deepgram;
 
+#[cfg(feature = "elevenlabs")]
+pub mod elevenlabs;
+
 #[cfg(feature = "mlx-runtime")]
 pub use mlx::{MlxConfig, MlxWhisperSubprocess};
 
 #[cfg(feature = "deepgram")]
-pub use deepgram::{BackoffConfig, DeepgramAdapter, DeepgramConfig};
+pub use deepgram::{DeepgramAdapter, DeepgramConfig};
+
+#[cfg(feature = "elevenlabs")]
+pub use elevenlabs::{ElevenLabsAdapter, ElevenLabsConfig};
 
 /// Identifier for an STT provider. Phase 3 T-3.1 ships `Mlx` + `Fake`; T-3.2 adds
-/// `Deepgram`; T-3.4 will add `ElevenLabs`. Variants stay flat (no nested config) so the
+/// `Deepgram`; T-3.4 adds `ElevenLabs`. Variants stay flat (no nested config) so the
 /// kind alone can be serialised into settings (`src/store/settingsStore.ts` v2 schema,
 /// T-3.6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -41,7 +56,7 @@ pub enum ProviderKind {
     Mlx,
     Fake,
     Deepgram,
-    // ElevenLabs,  — added in T-3.4
+    ElevenLabs,
 }
 
 impl ProviderKind {
@@ -53,6 +68,7 @@ impl ProviderKind {
             ProviderKind::Mlx => "mlx",
             ProviderKind::Fake => "fake",
             ProviderKind::Deepgram => "deepgram",
+            ProviderKind::ElevenLabs => "elevenlabs",
         }
     }
 }
@@ -67,6 +83,8 @@ pub enum ProviderConfig {
     Fake(FakeConfig),
     #[cfg(feature = "deepgram")]
     Deepgram(DeepgramConfig),
+    #[cfg(feature = "elevenlabs")]
+    ElevenLabs(ElevenLabsConfig),
 }
 
 /// Construction config for the deterministic in-process `FakeStt`. `fixed_text = None`
@@ -129,12 +147,19 @@ pub fn factory(
             let p = DeepgramAdapter::new(c)?;
             Ok(Box::new(p))
         }
+        #[cfg(feature = "elevenlabs")]
+        (ProviderKind::ElevenLabs, ProviderConfig::ElevenLabs(c)) => {
+            let p = ElevenLabsAdapter::new(c)?;
+            Ok(Box::new(p))
+        }
         // Feature-disabled cells: surface as ProviderDisabled so settings UI (T-3.6)
         // can grey out the picker entry rather than blowing up on a config mismatch.
         #[cfg(not(feature = "mlx-runtime"))]
         (ProviderKind::Mlx, _) => Err(FactoryError::ProviderDisabled(ProviderKind::Mlx)),
         #[cfg(not(feature = "deepgram"))]
         (ProviderKind::Deepgram, _) => Err(FactoryError::ProviderDisabled(ProviderKind::Deepgram)),
+        #[cfg(not(feature = "elevenlabs"))]
+        (ProviderKind::ElevenLabs, _) => Err(FactoryError::ProviderDisabled(ProviderKind::ElevenLabs)),
         // Catchall: kind/config variant mismatch (programmer error in the call site).
         // The cfg-gated arms above ensure each ProviderKind has exactly one valid config
         // pair; this arm only fires when the caller passes a wrong-shaped config.
@@ -173,6 +198,8 @@ mod tests {
         assert_eq!(ProviderKind::Fake.as_str(), "fake");
         // T-3.2: Deepgram added to picker.
         assert_eq!(ProviderKind::Deepgram.as_str(), "deepgram");
+        // T-3.4: ElevenLabs added to picker.
+        assert_eq!(ProviderKind::ElevenLabs.as_str(), "elevenlabs");
     }
 
     #[test]
@@ -330,6 +357,48 @@ mod tests {
             }
             other => panic!("expected FactoryError::Stt(SttError::Config), got {other:?}"),
         }
+    }
+
+    /// T-3.4 — factory regression for the ElevenLabs seam. Mirrors the Deepgram
+    /// missing-key test: a config with `api_key = None` must propagate as
+    /// `FactoryError::Stt(SttError::Config(_))` referencing `ELEVENLABS_API_KEY` so the
+    /// settings UI (T-3.6) can present the same actionable error shape for both
+    /// cloud providers.
+    #[cfg(feature = "elevenlabs")]
+    #[test]
+    fn factory_elevenlabs_propagates_config_error_when_key_missing() {
+        let cfg = ProviderConfig::ElevenLabs(ElevenLabsConfig {
+            api_key: None,
+            url: "ws://127.0.0.1:1/v1/speech-to-text/scribe-v1/stream".into(),
+            read_drain_timeout: std::time::Duration::from_millis(10),
+            backoff: BackoffConfig::default(),
+        });
+        let err = factory(ProviderKind::ElevenLabs, cfg).expect_err("missing key must error");
+        match err {
+            FactoryError::Stt(crate::provider::SttError::Config(msg)) => {
+                assert!(
+                    msg.contains("ELEVENLABS_API_KEY"),
+                    "msg should mention ELEVENLABS_API_KEY, got {msg:?}"
+                );
+            }
+            other => panic!("expected FactoryError::Stt(SttError::Config), got {other:?}"),
+        }
+    }
+
+    /// T-3.4 — factory must hand back a different `SttProvider::name()` for ElevenLabs
+    /// than for Deepgram. Settings telemetry (T-3.9) reads `name()` to log provider
+    /// switches; if both adapters reported the same name the audit log would conflate them.
+    #[cfg(feature = "elevenlabs")]
+    #[test]
+    fn factory_elevenlabs_distinct_name_from_deepgram() {
+        let cfg = ProviderConfig::ElevenLabs(ElevenLabsConfig {
+            api_key: Some("test-key".into()),
+            url: "ws://127.0.0.1:1/v1/speech-to-text/scribe-v1/stream".into(),
+            read_drain_timeout: std::time::Duration::from_millis(10),
+            backoff: BackoffConfig::default(),
+        });
+        let p = factory(ProviderKind::ElevenLabs, cfg).expect("factory");
+        assert_eq!(p.name(), "elevenlabs", "stable name for telemetry");
     }
 
     #[cfg(feature = "mlx-runtime")]

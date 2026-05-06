@@ -22,10 +22,13 @@
 // adapter only owns the in-flight socket. The chaos test
 // (`mock_ws_reconnects_after_mid_stream_drop`) drives the full sequence.
 //
-// `BackoffConfig` lives at module scope so T-3.4 (ElevenLabs adapter) can reuse the same
-// shape — adapter-side this is a `pub` field on the per-provider config struct rather
-// than a global because the Deepgram + ElevenLabs SLOs differ enough that defaults
-// shouldn't be shared.
+// `BackoffConfig` lives in `providers::backoff` (T-3.4 relocation) so both the Deepgram
+// and ElevenLabs adapters can reuse the same shape without a feature-flag coupling.
+// Adapter-side this is a `pub` field on the per-provider config struct rather than a
+// global because the Deepgram + ElevenLabs SLOs differ enough that defaults shouldn't be
+// shared. Behavior is byte-identical to T-3.3's in-place definition; this file
+// re-exports the type below to preserve the `providers::deepgram::BackoffConfig` import
+// path.
 //
 // ## Trait shape — streaming source through a sync per-chunk API
 //
@@ -70,81 +73,12 @@ use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
 use crate::provider::{SttError, SttProvider, SttSegment};
-
-/// Bounded reconnect / retry policy. Used by `DeepgramAdapter::connect_with_backoff` to
-/// cap the wall-clock spent on transient transport failures before surfacing
-/// `SttError::ProviderUnavailable`.
-///
-/// Defaults (200 ms initial, 2.0× multiplier, 3 s cap, 3 attempts, ±25 % jitter) keep the
-/// worst-case wall-clock at ~5 s per call (200 + 400 + 800 + small jitter), well under
-/// the Phase 3 AC of "reconnect within 10 s". Tests override with shorter delays so the
-/// chaos suite finishes in tens of milliseconds.
-///
-/// `max_retries` counts *total* connect attempts (not retries-after-first), so `1` =
-/// no retries (single attempt then fail). `0` is normalized to `1` at use-time.
-#[derive(Debug, Clone)]
-pub struct BackoffConfig {
-    pub initial_delay: Duration,
-    pub multiplier: f32,
-    pub max_delay: Duration,
-    pub max_retries: u32,
-    /// Symmetric jitter as a fraction of the current delay. `0.0` = deterministic;
-    /// `0.25` = each sleep is uniformly distributed in `[0.75d, 1.25d]`. Bounded
-    /// upper-side to avoid pathological waits when `multiplier × delay` already
-    /// approaches `max_delay`.
-    pub jitter: f32,
-}
-
-impl Default for BackoffConfig {
-    fn default() -> Self {
-        Self {
-            initial_delay: Duration::from_millis(200),
-            multiplier: 2.0,
-            max_delay: Duration::from_secs(3),
-            max_retries: 3,
-            jitter: 0.25,
-        }
-    }
-}
-
-impl BackoffConfig {
-    /// Apply the multiplier-and-cap rule once. Pure (no sleep, no I/O) so this is the
-    /// unit-test seam for the backoff schedule.
-    pub fn next_delay(&self, current: Duration) -> Duration {
-        let scaled = current.mul_f32(self.multiplier.max(1.0));
-        if scaled > self.max_delay {
-            self.max_delay
-        } else {
-            scaled
-        }
-    }
-
-    /// Apply jitter in `[1-j, 1+j]` to `d`. Deterministic for `jitter == 0.0`.
-    /// `pseudo_unit_sample` is in `[0.0, 1.0]` — the caller injects randomness so this
-    /// helper stays pure and testable.
-    pub fn jittered(&self, d: Duration, pseudo_unit_sample: f32) -> Duration {
-        let j = self.jitter.clamp(0.0, 1.0);
-        if j == 0.0 {
-            return d;
-        }
-        let s = pseudo_unit_sample.clamp(0.0, 1.0);
-        let factor = (1.0 - j) + (s * 2.0 * j); // ∈ [1-j, 1+j]
-        d.mul_f32(factor)
-    }
-}
-
-/// Cheap pseudo-random unit sample in `[0.0, 1.0]` derived from the system clock — good
-/// enough for connect-storm jitter (we only need to de-correlate parallel reconnect
-/// attempts; cryptographic randomness is overkill). Lives here so the adapter doesn't
-/// pull in `rand` for one float.
-fn clock_jitter_sample() -> f32 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    (nanos % 10_000) as f32 / 10_000.0
-}
+// `BackoffConfig` lives in `providers::backoff` (T-3.4) so both Deepgram + ElevenLabs
+// adapters share the same shape without a feature-flag coupling. Re-export here to
+// preserve the `providers::deepgram::BackoffConfig` import path used by T-3.3 tests
+// and the crate-root re-export in `lib.rs`.
+pub use crate::providers::backoff::BackoffConfig;
+use crate::providers::backoff::clock_jitter_sample;
 
 /// Configuration for the Deepgram WebSocket adapter.
 ///
