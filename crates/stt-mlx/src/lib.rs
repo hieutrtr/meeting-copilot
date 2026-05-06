@@ -1,19 +1,27 @@
-// stt-mlx — Phase 1 T-1.5 (Meeting Copilot).
+// stt-mlx — Phase 1 T-1.5 (initial trait + MLX impl) + Phase 3 T-3.1 (pluggable provider factory).
 //
-// Public surface:
+// Public surface (stable across the T-3.1 refactor — helper-daemon imports these by name):
 // - `provider::{SttProvider, SttSegment, SttError, FakeStt}` — always available.
-// - `mlx::{MlxConfig, MlxWhisperSubprocess}` — gated by feature `mlx-runtime` (default-on).
-//   Disabled for headless CI where Python is not installed; the trait + FakeStt remain.
+// - `providers::{ProviderKind, ProviderConfig, FakeConfig, FactoryError, factory}` — Phase 3 seam.
+// - `providers::mlx::{MlxConfig, MlxWhisperSubprocess}` — gated by feature `mlx-runtime`
+//   (default-on). Disabled for headless CI / helper-daemon (`default-features = false`) where
+//   Python is not installed; the trait + FakeStt + factory(Fake, …) remain.
+//
+// T-3.1 relocates the previous top-level `mlx` module to `providers::mlx` and adds a
+// `providers::factory()` seam used by helper-daemon (T-3.1) + settings UI (T-3.6) to swap
+// providers at runtime. The crate's existing public symbols (`SttProvider`, `FakeStt`,
+// `MlxConfig`, `MlxWhisperSubprocess`) keep their crate-root re-exports so no downstream
+// import path needs to change.
 //
 // Layered above `audio-capture` (`PcmChunk`); consumed by T-1.6 (Tauri event bridge),
-// T-1.9 (meeting state machine), T-1.13 (E2E smoke). See ARCHITECTURE.md §3.1/§3.2.
+// T-1.9 (meeting state machine), T-1.13 (E2E smoke), and Phase 3 T-3.6 (settings UI).
+// See ARCHITECTURE.md §3.1/§3.2.
 
 pub mod provider;
-
-#[cfg(feature = "mlx-runtime")]
-pub mod mlx;
+pub mod providers;
 
 pub use provider::{FakeStt, SttError, SttProvider, SttSegment};
+pub use providers::{factory, FactoryError, FakeConfig, ProviderConfig, ProviderKind};
 
 #[cfg(feature = "mlx-runtime")]
-pub use mlx::{MlxConfig, MlxWhisperSubprocess};
+pub use providers::{MlxConfig, MlxWhisperSubprocess};

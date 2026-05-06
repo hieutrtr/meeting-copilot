@@ -1,10 +1,13 @@
 // MlxWhisperSubprocess — production STT via Python `mlx-whisper` (Apple Silicon only).
-// Per docs/ARCHITECTURE.md §3.2 (MLX local default) and Phase 1 T-1.5 task plan.
+// Per docs/ARCHITECTURE.md §3.2 (MLX local default), Phase 1 T-1.5 task plan, and Phase 3 T-3.1
+// trait-extraction refactor (file relocated from `crates/stt-mlx/src/mlx.rs` →
+// `crates/stt-mlx/src/providers/mlx.rs`; `MlxConfig` + `MlxWhisperSubprocess` API + behavior
+// unchanged — relocation only, no signature changes).
 //
 // HARDWARE-VERIFY PENDING: this module is code-complete but its runtime path requires
 // (a) `cargo` toolchain installed (blocked-action #3 per Phase 1 INDEX) — every cargo test
 // in this module is hardware-verify-only on the loop sandbox; static-trace recorded in
-// T-1.5-review.md, and
+// T-1.5-review.md / T-3.1-review.md, and
 // (b) Python with `mlx_whisper` importable. The integration test
 // `mlx_subprocess_transcribes_short_utterance` soft-skips if `is_available()` is false or
 // macOS `say`/`ffmpeg` are missing.
@@ -28,8 +31,9 @@ use crate::provider::{duration_ms, SttError, SttProvider, SttSegment};
 
 /// The Python script is embedded into the Rust binary at compile time. `cargo` reruns the
 /// build when `scripts/transcribe.py` changes (the `include_str!` macro registers it as a
-/// rebuild input).
-const TRANSCRIBE_PY: &str = include_str!("../scripts/transcribe.py");
+/// rebuild input). Path is relative to *this* source file: from `src/providers/mlx.rs` the
+/// script lives at `../../scripts/transcribe.py`.
+const TRANSCRIBE_PY: &str = include_str!("../../scripts/transcribe.py");
 
 /// Configuration for `MlxWhisperSubprocess`. Defaults read env vars (`MLX_WHISPER_PYTHON`,
 /// `MLX_WHISPER_MODEL`) so dev hosts and the Phase-0 spike venv at
