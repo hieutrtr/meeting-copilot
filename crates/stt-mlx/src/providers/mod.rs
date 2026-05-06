@@ -9,9 +9,11 @@
 //      helper-daemon (Phase 3 T-3.1) and src-tauri commands (Phase 3 T-3.6 settings UI) call
 //      to swap providers at runtime without restarting the meeting.
 //
-// Phase 3 T-3.2 fills in `Deepgram`; T-3.4 fills in `ElevenLabs`. T-3.1's job is the trait
-// extraction + factory pattern + carry-forward Phase 1/2 cargo test green. **Behavior of
-// existing adapters (MLX + Fake) is unchanged** — relocation + factory wiring only.
+// Phase 3 T-3.2 fills in `Deepgram`; T-3.3 layers reconnect-with-backoff onto the same
+// adapter (additive — no factory signature change); T-3.4 fills in `ElevenLabs`. T-3.1's
+// job is the trait extraction + factory pattern + carry-forward Phase 1/2 cargo test
+// green. **Behavior of existing adapters (MLX + Fake) is unchanged** — relocation +
+// factory wiring only.
 //
 // ARCH refs: §3 "STT — Pluggable Provider" (3.1 interface, 3.2 default = MLX, 3.3 alternates
 // = Deepgram / ElevenLabs Scribe).
@@ -28,7 +30,7 @@ pub mod deepgram;
 pub use mlx::{MlxConfig, MlxWhisperSubprocess};
 
 #[cfg(feature = "deepgram")]
-pub use deepgram::{DeepgramAdapter, DeepgramConfig};
+pub use deepgram::{BackoffConfig, DeepgramAdapter, DeepgramConfig};
 
 /// Identifier for an STT provider. Phase 3 T-3.1 ships `Mlx` + `Fake`; T-3.2 adds
 /// `Deepgram`; T-3.4 will add `ElevenLabs`. Variants stay flat (no nested config) so the
@@ -319,6 +321,7 @@ mod tests {
             api_key: None,
             url: "ws://127.0.0.1:1/v1/listen".into(),
             read_drain_timeout: std::time::Duration::from_millis(10),
+            backoff: BackoffConfig::default(),
         });
         let err = factory(ProviderKind::Deepgram, cfg).expect_err("missing key must error");
         match err {

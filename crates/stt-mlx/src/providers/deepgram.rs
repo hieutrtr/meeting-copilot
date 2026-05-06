@@ -1,8 +1,31 @@
-// Deepgram WebSocket STT adapter — Phase 3 T-3.2.
+// Deepgram WebSocket STT adapter — Phase 3 T-3.2 + T-3.3.
 //
 // Streams 16 kHz linear16 PCM frames over a WebSocket to Deepgram's `/v1/listen` endpoint
 // and decodes the `Results` JSON envelopes into `SttSegment`s. Plugs into the `SttProvider`
 // trait extracted by T-3.1 (`crate::provider::SttProvider`).
+//
+// ## Reconnect (T-3.3)
+//
+// `connect_with_backoff` retries `connect()` up to `BackoffConfig::max_retries` (default
+// 3) with exponential, jittered backoff capped at `max_delay`. Total wall-clock with the
+// default config is well under 10 s (per Phase 3 INDEX AC: "Reconnect within 10 s; 3-strike
+// rule emits typed error"). When the budget is exhausted the adapter returns
+// `SttError::ProviderUnavailable { attempts, last_error }` so the caller can surface a
+// typed user-facing failure (T-3.6 settings UI, T-3.9 telemetry) without unwrapping a
+// nested `Io(String)`.
+//
+// Mid-stream connection drops are absorbed transparently: when the read loop sees
+// `ConnectionClosed` / `AlreadyClosed` it drops the socket and returns the segments
+// drained so far; the *next* `transcribe_chunk` call observes `socket = None` and triggers
+// a fresh `connect_with_backoff`. Session continuity (segments emitted before the drop)
+// is preserved by the caller's accumulator (`shared/types.ts:TranscriptChunk`); the
+// adapter only owns the in-flight socket. The chaos test
+// (`mock_ws_reconnects_after_mid_stream_drop`) drives the full sequence.
+//
+// `BackoffConfig` lives at module scope so T-3.4 (ElevenLabs adapter) can reuse the same
+// shape — adapter-side this is a `pub` field on the per-provider config struct rather
+// than a global because the Deepgram + ElevenLabs SLOs differ enough that defaults
+// shouldn't be shared.
 //
 // ## Trait shape — streaming source through a sync per-chunk API
 //
@@ -48,6 +71,81 @@ use tungstenite::{Message, WebSocket};
 
 use crate::provider::{SttError, SttProvider, SttSegment};
 
+/// Bounded reconnect / retry policy. Used by `DeepgramAdapter::connect_with_backoff` to
+/// cap the wall-clock spent on transient transport failures before surfacing
+/// `SttError::ProviderUnavailable`.
+///
+/// Defaults (200 ms initial, 2.0× multiplier, 3 s cap, 3 attempts, ±25 % jitter) keep the
+/// worst-case wall-clock at ~5 s per call (200 + 400 + 800 + small jitter), well under
+/// the Phase 3 AC of "reconnect within 10 s". Tests override with shorter delays so the
+/// chaos suite finishes in tens of milliseconds.
+///
+/// `max_retries` counts *total* connect attempts (not retries-after-first), so `1` =
+/// no retries (single attempt then fail). `0` is normalized to `1` at use-time.
+#[derive(Debug, Clone)]
+pub struct BackoffConfig {
+    pub initial_delay: Duration,
+    pub multiplier: f32,
+    pub max_delay: Duration,
+    pub max_retries: u32,
+    /// Symmetric jitter as a fraction of the current delay. `0.0` = deterministic;
+    /// `0.25` = each sleep is uniformly distributed in `[0.75d, 1.25d]`. Bounded
+    /// upper-side to avoid pathological waits when `multiplier × delay` already
+    /// approaches `max_delay`.
+    pub jitter: f32,
+}
+
+impl Default for BackoffConfig {
+    fn default() -> Self {
+        Self {
+            initial_delay: Duration::from_millis(200),
+            multiplier: 2.0,
+            max_delay: Duration::from_secs(3),
+            max_retries: 3,
+            jitter: 0.25,
+        }
+    }
+}
+
+impl BackoffConfig {
+    /// Apply the multiplier-and-cap rule once. Pure (no sleep, no I/O) so this is the
+    /// unit-test seam for the backoff schedule.
+    pub fn next_delay(&self, current: Duration) -> Duration {
+        let scaled = current.mul_f32(self.multiplier.max(1.0));
+        if scaled > self.max_delay {
+            self.max_delay
+        } else {
+            scaled
+        }
+    }
+
+    /// Apply jitter in `[1-j, 1+j]` to `d`. Deterministic for `jitter == 0.0`.
+    /// `pseudo_unit_sample` is in `[0.0, 1.0]` — the caller injects randomness so this
+    /// helper stays pure and testable.
+    pub fn jittered(&self, d: Duration, pseudo_unit_sample: f32) -> Duration {
+        let j = self.jitter.clamp(0.0, 1.0);
+        if j == 0.0 {
+            return d;
+        }
+        let s = pseudo_unit_sample.clamp(0.0, 1.0);
+        let factor = (1.0 - j) + (s * 2.0 * j); // ∈ [1-j, 1+j]
+        d.mul_f32(factor)
+    }
+}
+
+/// Cheap pseudo-random unit sample in `[0.0, 1.0]` derived from the system clock — good
+/// enough for connect-storm jitter (we only need to de-correlate parallel reconnect
+/// attempts; cryptographic randomness is overkill). Lives here so the adapter doesn't
+/// pull in `rand` for one float.
+fn clock_jitter_sample() -> f32 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    (nanos % 10_000) as f32 / 10_000.0
+}
+
 /// Configuration for the Deepgram WebSocket adapter.
 ///
 /// `api_key` — when `None` or empty, `DeepgramAdapter::new()` returns
@@ -60,11 +158,15 @@ use crate::provider::{SttError, SttProvider, SttSegment};
 /// `read_drain_timeout` — how long to wait on the socket per drain iteration before giving
 /// up and returning what we've collected. 50 ms is short enough that real-time chunks
 /// don't stall, long enough that a localhost mock server's response arrives in time.
+///
+/// `backoff` — bounded reconnect policy used by `connect_with_backoff` (T-3.3). Defaults
+/// keep the worst-case wall-clock under the 10 s AC budget.
 #[derive(Debug, Clone)]
 pub struct DeepgramConfig {
     pub api_key: Option<String>,
     pub url: String,
     pub read_drain_timeout: Duration,
+    pub backoff: BackoffConfig,
 }
 
 impl Default for DeepgramConfig {
@@ -76,6 +178,7 @@ impl Default for DeepgramConfig {
             // / UX hook surface partials without re-handshaking the socket).
             url: "wss://api.deepgram.com/v1/listen?model=nova-2&encoding=linear16&sample_rate=16000&channels=1&interim_results=true".into(),
             read_drain_timeout: Duration::from_millis(50),
+            backoff: BackoffConfig::default(),
         }
     }
 }
@@ -140,6 +243,48 @@ impl DeepgramAdapter {
             .map_err(|e| SttError::Io(format!("ws connect: {e}")))?;
         Ok(sock)
     }
+
+    /// Bounded reconnect: try `connect()` up to `backoff.max_retries` times with
+    /// exponential, jittered sleeps between attempts. Returns:
+    /// - `Ok(sock)` on first successful handshake (no sleep before attempt 1).
+    /// - `Err(SttError::Config(_))` immediately on configuration errors (bad URL, bad
+    ///   header value, missing key) — these are user-actionable, not transient, so retrying
+    ///   would only delay the surfacing of a typo or stale config.
+    /// - `Err(SttError::ProviderUnavailable { attempts, last_error })` after the
+    ///   `max_retries` budget is exhausted on transient `Io` errors.
+    ///
+    /// Total wall-clock with default config (200 ms initial, 2× multiplier, 3 retries,
+    /// 3 s cap) is bounded at ~600 ms + jitter — well under the 10 s AC. Tests inject
+    /// 0 ms initial / 0 jitter to assert the failure surface in microseconds.
+    fn connect_with_backoff(&self) -> Result<Sock, SttError> {
+        let max = self.config.backoff.max_retries.max(1);
+        let mut delay = self.config.backoff.initial_delay;
+        let mut last_error = String::from("(no attempt made)");
+
+        for attempt in 1..=max {
+            match self.connect() {
+                Ok(sock) => return Ok(sock),
+                // Config errors are not transient — surface immediately.
+                Err(e @ SttError::Config(_)) => return Err(e),
+                Err(e) => {
+                    last_error = format!("{e}");
+                    if attempt < max {
+                        let jittered = self
+                            .config
+                            .backoff
+                            .jittered(delay, clock_jitter_sample());
+                        std::thread::sleep(jittered);
+                        delay = self.config.backoff.next_delay(delay);
+                    }
+                }
+            }
+        }
+
+        Err(SttError::ProviderUnavailable {
+            attempts: max,
+            last_error,
+        })
+    }
 }
 
 impl SttProvider for DeepgramAdapter {
@@ -149,7 +294,13 @@ impl SttProvider for DeepgramAdapter {
 
     fn transcribe_chunk(&mut self, chunk: &PcmChunk) -> Result<Vec<SttSegment>, SttError> {
         if self.socket.is_none() {
-            self.socket = Some(self.connect()?);
+            // T-3.3: bounded reconnect on the connect path. Mid-stream drops are absorbed
+            // separately — when the read loop sees ConnectionClosed/AlreadyClosed it
+            // drops the socket and the *next* chunk hits this branch and retries the
+            // handshake. session_base_ts_ms re-anchors against the new chunk's ts_ms so
+            // segments arriving on the new connection have correct meeting-time offsets
+            // (Deepgram's `start` field resets per-connection).
+            self.socket = Some(self.connect_with_backoff()?);
             self.session_base_ts_ms = Some(chunk.ts_ms);
         }
         let session_base = self.session_base_ts_ms.unwrap_or(chunk.ts_ms);
@@ -158,9 +309,17 @@ impl SttProvider for DeepgramAdapter {
         let drain_timeout = self.config.read_drain_timeout;
 
         let socket = self.socket.as_mut().expect("socket connected above");
-        socket
-            .send(Message::Binary(payload))
-            .map_err(|e| SttError::Io(format!("ws send: {e}")))?;
+        if let Err(e) = socket.send(Message::Binary(payload)) {
+            // The previous socket died (server closed between this send and the last
+            // drain, or the OS noticed a half-open TCP connection). Drop it and let the
+            // *next* chunk re-trigger `connect_with_backoff`. The current chunk is lost
+            // for this call — Deepgram streaming is best-effort and the meeting state
+            // machine (T-1.9) tolerates a missing chunk on reconnect (the next chunk's
+            // session_base re-anchors). T-3.9 telemetry will count these events.
+            self.socket = None;
+            self.session_base_ts_ms = None;
+            return Err(SttError::Io(format!("ws send: {e}")));
+        }
 
         // Switch the underlying TcpStream to non-blocking-via-timeout for the drain loop.
         set_read_timeout(socket, Some(drain_timeout));
@@ -322,12 +481,25 @@ mod tests {
     // Construction-time validation
     // -----------------------------------------------------------------------
 
+    /// Test-default backoff: ~zero wait so failure paths surface in microseconds rather
+    /// than the production 200 ms / 3-attempt budget.
+    fn fast_backoff() -> BackoffConfig {
+        BackoffConfig {
+            initial_delay: Duration::from_millis(0),
+            multiplier: 1.0,
+            max_delay: Duration::from_millis(1),
+            max_retries: 3,
+            jitter: 0.0,
+        }
+    }
+
     #[test]
     fn new_returns_config_error_when_key_missing() {
         let cfg = DeepgramConfig {
             api_key: None,
             url: "ws://127.0.0.1:1/v1/listen".into(),
             read_drain_timeout: Duration::from_millis(10),
+            backoff: fast_backoff(),
         };
         let err = DeepgramAdapter::new(cfg).expect_err("missing key must error");
         match err {
@@ -347,6 +519,7 @@ mod tests {
             api_key: Some(String::new()),
             url: "ws://127.0.0.1:1/v1/listen".into(),
             read_drain_timeout: Duration::from_millis(10),
+            backoff: fast_backoff(),
         };
         let err = DeepgramAdapter::new(cfg).expect_err("empty key must error");
         assert!(matches!(err, SttError::Config(_)));
@@ -358,6 +531,7 @@ mod tests {
             api_key: Some("nope".into()),
             url: "ws://127.0.0.1:1/v1/listen".into(),
             read_drain_timeout: Duration::from_millis(10),
+            backoff: fast_backoff(),
         };
         let adapter = DeepgramAdapter::new(cfg).expect("new");
         // Stable string ID — settings persistence (T-3.6) + telemetry (T-3.9) read this.
@@ -507,6 +681,7 @@ mod tests {
             api_key: Some("abc-xyz-test".into()),
             url: format!("ws://127.0.0.1:{port}/v1/listen?model=nova-2"),
             read_drain_timeout: Duration::from_millis(150),
+            backoff: fast_backoff(),
         };
         let mut adapter = DeepgramAdapter::new(cfg).expect("new");
         let chunk = fake_chunk(16_000, 16_000, 0);
@@ -536,6 +711,7 @@ mod tests {
             // Generous drain timeout — localhost RTT is sub-millisecond, but the server
             // sends 3 frames and we want the read loop to find them all before timing out.
             read_drain_timeout: Duration::from_millis(300),
+            backoff: fast_backoff(),
         };
         let mut adapter = DeepgramAdapter::new(cfg).expect("new");
         // Chunk ts_ms = 5_000 → session_base = 5_000.
@@ -568,11 +744,276 @@ mod tests {
             api_key: Some("abc".into()),
             url: format!("ws://127.0.0.1:{port}/v1/listen"),
             read_drain_timeout: Duration::from_millis(50),
+            backoff: fast_backoff(),
         };
         let mut adapter = DeepgramAdapter::new(cfg).expect("new");
         let chunk = fake_chunk(16_000, 16_000, 0);
         let segs = adapter.transcribe_chunk(&chunk).expect("transcribe");
         let _ = server.join();
         assert!(segs.is_empty(), "no responses → no segments");
+    }
+
+    // -----------------------------------------------------------------------
+    // T-3.3 — backoff schedule (pure unit tests; no I/O)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn backoff_next_delay_doubles_until_cap() {
+        let bo = BackoffConfig {
+            initial_delay: Duration::from_millis(100),
+            multiplier: 2.0,
+            max_delay: Duration::from_millis(500),
+            max_retries: 5,
+            jitter: 0.0,
+        };
+        // 100 → 200 → 400 → 500 (cap) → 500 (cap holds)
+        let d = Duration::from_millis(100);
+        let d = bo.next_delay(d);
+        assert_eq!(d, Duration::from_millis(200));
+        let d = bo.next_delay(d);
+        assert_eq!(d, Duration::from_millis(400));
+        let d = bo.next_delay(d);
+        assert_eq!(d, Duration::from_millis(500), "must cap at max_delay");
+        let d = bo.next_delay(d);
+        assert_eq!(d, Duration::from_millis(500), "cap holds across iterations");
+    }
+
+    #[test]
+    fn backoff_next_delay_normalizes_sub_one_multiplier() {
+        // A multiplier < 1.0 would shrink the delay forever — clamped to 1.0 so the
+        // schedule is monotonic non-decreasing.
+        let bo = BackoffConfig {
+            initial_delay: Duration::from_millis(100),
+            multiplier: 0.5,
+            max_delay: Duration::from_millis(1000),
+            max_retries: 3,
+            jitter: 0.0,
+        };
+        assert_eq!(
+            bo.next_delay(Duration::from_millis(100)),
+            Duration::from_millis(100)
+        );
+    }
+
+    #[test]
+    fn backoff_jittered_stays_within_bounds() {
+        let bo = BackoffConfig {
+            initial_delay: Duration::from_millis(100),
+            multiplier: 2.0,
+            max_delay: Duration::from_secs(10),
+            max_retries: 3,
+            jitter: 0.25,
+        };
+        let base = Duration::from_millis(400);
+        // s = 0.0 → factor = 0.75 → 300 ms; s = 1.0 → factor = 1.25 → 500 ms.
+        assert_eq!(bo.jittered(base, 0.0), Duration::from_millis(300));
+        assert_eq!(bo.jittered(base, 1.0), Duration::from_millis(500));
+        // Mid-sample → factor = 1.0 → unchanged.
+        assert_eq!(bo.jittered(base, 0.5), base);
+    }
+
+    #[test]
+    fn backoff_jittered_zero_jitter_is_identity() {
+        let bo = BackoffConfig {
+            initial_delay: Duration::from_millis(100),
+            multiplier: 2.0,
+            max_delay: Duration::from_secs(1),
+            max_retries: 3,
+            jitter: 0.0,
+        };
+        let base = Duration::from_millis(123);
+        assert_eq!(bo.jittered(base, 0.0), base);
+        assert_eq!(bo.jittered(base, 0.5), base);
+        assert_eq!(bo.jittered(base, 1.0), base);
+    }
+
+    // -----------------------------------------------------------------------
+    // T-3.3 — connect-with-backoff over real sockets
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn connect_returns_provider_unavailable_after_max_retries() {
+        // Port 1 — never listening, instant ECONNREFUSED. With max_retries = 3 and
+        // sub-ms backoff this assertion completes in microseconds.
+        let cfg = DeepgramConfig {
+            api_key: Some("abc".into()),
+            url: "ws://127.0.0.1:1/v1/listen".into(),
+            read_drain_timeout: Duration::from_millis(10),
+            backoff: BackoffConfig {
+                initial_delay: Duration::from_millis(0),
+                multiplier: 1.0,
+                max_delay: Duration::from_millis(1),
+                max_retries: 3,
+                jitter: 0.0,
+            },
+        };
+        let mut adapter = DeepgramAdapter::new(cfg).expect("new");
+        let chunk = fake_chunk(16_000, 16_000, 0);
+        let err = adapter
+            .transcribe_chunk(&chunk)
+            .expect_err("port 1 must refuse connection");
+        match err {
+            SttError::ProviderUnavailable {
+                attempts,
+                last_error,
+            } => {
+                assert_eq!(attempts, 3, "exhausted budget == 3 attempts");
+                assert!(
+                    !last_error.is_empty(),
+                    "last_error should capture the underlying transport failure"
+                );
+            }
+            other => panic!("expected ProviderUnavailable, got {other:?}"),
+        }
+        // Adapter state cleared so the next chunk re-attempts a fresh handshake budget.
+        // No socket retained; no session_base from the failed attempt.
+        let chunk2 = fake_chunk(16_000, 16_000, 1_000);
+        let _ = adapter.transcribe_chunk(&chunk2).expect_err("still refused");
+    }
+
+    #[test]
+    fn connect_does_not_retry_on_config_error() {
+        // Bad URL → SttError::Config from `into_client_request`. Config errors are
+        // user-actionable, not transient — must surface immediately without consuming the
+        // retry budget.
+        let cfg = DeepgramConfig {
+            api_key: Some("abc".into()),
+            url: "not-a-valid-url".into(),
+            read_drain_timeout: Duration::from_millis(10),
+            backoff: BackoffConfig {
+                initial_delay: Duration::from_millis(50),
+                multiplier: 2.0,
+                max_delay: Duration::from_millis(500),
+                max_retries: 3,
+                jitter: 0.0,
+            },
+        };
+        let mut adapter = DeepgramAdapter::new(cfg).expect("new");
+        let chunk = fake_chunk(16_000, 16_000, 0);
+
+        let start = std::time::Instant::now();
+        let err = adapter
+            .transcribe_chunk(&chunk)
+            .expect_err("bad url must error");
+        let elapsed = start.elapsed();
+
+        assert!(
+            matches!(err, SttError::Config(_)),
+            "config errors are not retried; got {err:?}"
+        );
+        // If we accidentally retried 3× with 50/100/200 ms backoff this would be ≥ 150 ms.
+        // Single attempt + no sleep → < 50 ms wall-clock even on a slow CI box.
+        assert!(
+            elapsed < Duration::from_millis(50),
+            "config error must not consume backoff budget; elapsed = {elapsed:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // T-3.3 — chaos test: drop mid-stream, assert reconnect + session continuity
+    //
+    // Server lifecycle:
+    //   conn 1: accept → send GOLDEN_FINAL → close
+    //   conn 2: accept → send GOLDEN_FINAL_2 → close
+    // Adapter lifecycle:
+    //   call 1: connect_with_backoff → send PCM → drain segment 1 → see Close → drop socket
+    //   call 2: socket is None → connect_with_backoff (succeeds via backoff retry on race) →
+    //           send PCM → drain segment 2 → see Close → drop socket
+    // The two calls must return both segments — no chunk is double-counted, the session
+    // base re-anchors per connection so timestamps stay meeting-relative.
+    // -----------------------------------------------------------------------
+
+    /// Spawn a chaos server: accepts two sequential connections on the same port. Each
+    /// connection sends one finalized segment then closes. After both connections are
+    /// served the listener drops. Returns `(port, join_handle)`.
+    fn spawn_chaos_server_two_connections(
+        body1: &'static str,
+        body2: &'static str,
+    ) -> (u16, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let h = thread::spawn(move || {
+            for body in [body1, body2] {
+                let (stream, _) = match listener.accept() {
+                    Ok(p) => p,
+                    Err(_) => return,
+                };
+                let mut sock = match tungstenite::accept(stream) {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
+                let _ = sock.send(Message::Text(body.to_string()));
+                // Best-effort: give the client a moment to drain the text frame before
+                // we yank the socket. 100 ms is well above localhost RTT (sub-ms) and
+                // bounded enough that the test as a whole stays sub-second.
+                let _ = sock
+                    .get_mut()
+                    .set_read_timeout(Some(Duration::from_millis(100)));
+                let _ = sock.read();
+                let _ = sock.close(None);
+                // Drop both `sock` and the underlying TCP — simulates the network cable
+                // pull / Deepgram-side disconnect that T-3.3 must absorb.
+            }
+        });
+        (port, h)
+    }
+
+    const GOLDEN_FINAL_2: &str = r#"{"type":"Results","is_final":true,"speech_final":true,"start":0.0,"duration":1.0,"channel":{"alternatives":[{"transcript":"second segment after reconnect","confidence":0.91}]}}"#;
+
+    #[test]
+    fn mock_ws_reconnects_after_mid_stream_drop() {
+        let (port, server) = spawn_chaos_server_two_connections(GOLDEN_FINAL, GOLDEN_FINAL_2);
+        let cfg = DeepgramConfig {
+            api_key: Some("abc".into()),
+            url: format!("ws://127.0.0.1:{port}/v1/listen"),
+            read_drain_timeout: Duration::from_millis(300),
+            // Real backoff with non-trivial initial — exercises the schedule, not the
+            // zero-wait shortcut. Total budget = 50 + 100 = 150 ms < 10 s AC.
+            backoff: BackoffConfig {
+                initial_delay: Duration::from_millis(50),
+                multiplier: 2.0,
+                max_delay: Duration::from_millis(200),
+                max_retries: 3,
+                jitter: 0.0,
+            },
+        };
+        let mut adapter = DeepgramAdapter::new(cfg).expect("new");
+
+        // Call 1 — meeting time 5_000 ms. session_base anchors here. Server delivers
+        // GOLDEN_FINAL (start=1.5, duration=2.3) then closes.
+        let chunk1 = fake_chunk(16_000, 16_000, 5_000);
+        let segs1 = adapter
+            .transcribe_chunk(&chunk1)
+            .expect("call 1 must succeed (drain before close)");
+        assert_eq!(segs1.len(), 1, "first connection emits 1 segment");
+        assert_eq!(segs1[0].text, "What time is the meeting?");
+        assert_eq!(segs1[0].start_ts_ms, 6_500); // 5_000 + 1_500
+
+        // Critical assertion: server closed the socket — adapter must have dropped it so
+        // call 2 reconnects rather than trying to write to a dead handle. We can't poke
+        // private state, so the proof is operational: call 2 must succeed via reconnect.
+
+        // Call 2 — meeting time 12_000 ms. session_base re-anchors here (new connection,
+        // Deepgram clock resets to 0). Server delivers GOLDEN_FINAL_2 (start=0.0,
+        // duration=1.0) on connection #2.
+        // Allow a brief grace period for the server thread to close conn1 + return to
+        // accept() before the client connects. 150 ms is generous on localhost.
+        std::thread::sleep(Duration::from_millis(150));
+        let chunk2 = fake_chunk(16_000, 16_000, 12_000);
+        let segs2 = adapter
+            .transcribe_chunk(&chunk2)
+            .expect("call 2 must reconnect transparently");
+        assert_eq!(segs2.len(), 1, "second connection emits 1 segment");
+        assert_eq!(segs2[0].text, "second segment after reconnect");
+        // session_base re-anchored to chunk2.ts_ms = 12_000; Deepgram start = 0 → 12_000.
+        assert_eq!(
+            segs2[0].start_ts_ms, 12_000,
+            "session re-anchors per reconnect — meeting timeline preserved"
+        );
+
+        // Both segments belong to the same logical session; the caller (helper-daemon)
+        // accumulates them into the meeting transcript. T-3.3 contract = adapter does not
+        // lose any finalized segment that arrived before each connection's close.
+        let _ = server.join();
     }
 }

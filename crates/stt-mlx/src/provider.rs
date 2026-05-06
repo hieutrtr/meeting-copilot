@@ -44,6 +44,17 @@ pub enum SttError {
     /// T-3.4 (ElevenLabs) and T-3.6 (Settings) reuse it.
     #[error("config error: {0}")]
     Config(String),
+
+    /// Adapter exhausted its bounded reconnect budget — the transport repeatedly failed
+    /// across `attempts` connect retries with the captured `last_error`. Distinct from
+    /// `Io(String)` (a single transport failure) so callers can differentiate "transient
+    /// blip — caller may retry on next chunk" from "provider down — escalate to user
+    /// (toast / fallback to MLX)". Phase 3 T-3.3 introduced this variant for the Deepgram
+    /// adapter; T-3.4 (ElevenLabs) reuses it. Settings UI (T-3.6) maps this to a red
+    /// banner; telemetry (T-3.9) logs the `attempts` count without the underlying error
+    /// payload (which may carry a hostname / port).
+    #[error("provider unavailable after {attempts} attempts: {last_error}")]
+    ProviderUnavailable { attempts: u32, last_error: String },
 }
 
 /// Object-safe trait for any STT engine. `Box<dyn SttProvider>` compiles + is `Send` so the

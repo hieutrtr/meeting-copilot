@@ -1,14 +1,19 @@
 // stt-mlx — Phase 1 T-1.5 (initial trait + MLX impl) + Phase 3 T-3.1 (pluggable provider
-// factory) + Phase 3 T-3.2 (Deepgram WebSocket adapter).
+// factory) + Phase 3 T-3.2 (Deepgram WebSocket adapter) + Phase 3 T-3.3 (reconnect /
+// chaos handling — bounded backoff + `ProviderUnavailable` typed error).
 //
 // Public surface (stable across the T-3.1 refactor — helper-daemon imports these by name):
-// - `provider::{SttProvider, SttSegment, SttError, FakeStt}` — always available.
+// - `provider::{SttProvider, SttSegment, SttError, FakeStt}` — always available. T-3.3
+//   adds `SttError::ProviderUnavailable { attempts, last_error }` (additive variant).
 // - `providers::{ProviderKind, ProviderConfig, FakeConfig, FactoryError, factory}` — Phase 3 seam.
 // - `providers::mlx::{MlxConfig, MlxWhisperSubprocess}` — gated by feature `mlx-runtime`
 //   (default-on). Disabled for headless CI / helper-daemon (`default-features = false`) where
 //   Python is not installed; the trait + FakeStt + factory(Fake, …) remain.
-// - `providers::deepgram::{DeepgramAdapter, DeepgramConfig}` — gated by feature `deepgram`
-//   (default-on). Plain `ws://` only in T-3.2; TLS lands in T-3.3 alongside reconnect/chaos.
+// - `providers::deepgram::{DeepgramAdapter, DeepgramConfig, BackoffConfig}` — gated by feature
+//   `deepgram` (default-on). T-3.2 ships the framing + parsing seam (plain `ws://`); T-3.3
+//   wires the bounded-reconnect path that surfaces `SttError::ProviderUnavailable` after
+//   `BackoffConfig::max_retries` consecutive transport failures. TLS / `wss://` deferred to
+//   the live-demo task (T-3.6 settings test-connection wires rustls when needed).
 //
 // T-3.1 relocates the previous top-level `mlx` module to `providers::mlx` and adds a
 // `providers::factory()` seam used by helper-daemon (T-3.1) + settings UI (T-3.6) to swap
@@ -30,4 +35,4 @@ pub use providers::{factory, FactoryError, FakeConfig, ProviderConfig, ProviderK
 pub use providers::{MlxConfig, MlxWhisperSubprocess};
 
 #[cfg(feature = "deepgram")]
-pub use providers::{DeepgramAdapter, DeepgramConfig};
+pub use providers::{BackoffConfig, DeepgramAdapter, DeepgramConfig};
