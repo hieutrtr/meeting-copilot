@@ -406,3 +406,38 @@ describe("SettingsSheet — debounce in-flight click (SH-U8)", () => {
     expect(mock).toHaveBeenCalledTimes(2);
   });
 });
+
+// ── Phase 3 T-3.9 — Telemetry toggle (SH-U15..U16) ─────────────────────────
+
+describe("SettingsSheet — telemetry toggle (SH-U15)", () => {
+  it("SH-U15: initial render — checkbox is unchecked (default OFF)", () => {
+    render(<SettingsSheet />);
+    const toggle = screen.getByTestId(
+      "settings-telemetry-toggle",
+    ) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    expect(useSettingsStore.getState().telemetryEnabled).toBe(false);
+
+    // Hint text is rendered for the user.
+    const hint = screen.getByTestId("settings-telemetry-hint");
+    expect(hint.textContent).toContain("Local-only");
+    expect(hint.textContent).toContain("No transcript");
+  });
+});
+
+describe("SettingsSheet — telemetry toggle (SH-U16)", () => {
+  it("SH-U16: clicking the checkbox flips store.telemetryEnabled", () => {
+    render(<SettingsSheet />);
+    const toggle = screen.getByTestId(
+      "settings-telemetry-toggle",
+    ) as HTMLInputElement;
+
+    fireEvent.click(toggle);
+    expect(useSettingsStore.getState().telemetryEnabled).toBe(true);
+    expect(toggle.checked).toBe(true);
+
+    fireEvent.click(toggle);
+    expect(useSettingsStore.getState().telemetryEnabled).toBe(false);
+    expect(toggle.checked).toBe(false);
+  });
+});

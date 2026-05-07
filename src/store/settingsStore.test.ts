@@ -312,6 +312,7 @@ function snapshotFor(overrides: Partial<SettingsState>): SettingsState {
     sttProvider: "mlx",
     apiKeys: { deepgram: "", elevenlabs: "" },
     privacyMode: "local-first",
+    telemetryEnabled: false,
     setHaikuConfidenceCutoff: () => undefined,
     setHaikuEnabled: () => undefined,
     setSilenceThresholdMs: () => undefined,
@@ -320,6 +321,7 @@ function snapshotFor(overrides: Partial<SettingsState>): SettingsState {
     setSttProvider: () => undefined,
     setApiKey: () => undefined,
     setPrivacyMode: () => undefined,
+    setTelemetryEnabled: () => undefined,
     reset: () => undefined,
   };
   return { ...base, ...overrides };
@@ -715,5 +717,70 @@ describe("SS-S40: auto-revert is a no-op when current provider is still allowed"
     store.getState().setSttProvider("deepgram");
     store.getState().setPrivacyMode("cloud");
     expect(store.getState().sttProvider).toBe("deepgram");
+  });
+});
+
+// ── Phase 3 T-3.9 — Telemetry opt-in toggle ────────────────────────────────
+
+describe("SS-S41: default telemetryEnabled is false (opt-in)", () => {
+  it("matches SETTINGS_DEFAULTS.telemetryEnabled", () => {
+    const store = createSettingsStore({ storage: createMockStorage() });
+    expect(store.getState().telemetryEnabled).toBe(false);
+    expect(SETTINGS_DEFAULTS.telemetryEnabled).toBe(false);
+  });
+});
+
+describe("SS-S42: setTelemetryEnabled round-trip + persistence", () => {
+  it("toggle on persists; recreate from same storage carries forward", () => {
+    const storage = createMockStorage();
+    const a = createSettingsStore({ storage });
+    a.getState().setTelemetryEnabled(true);
+    expect(a.getState().telemetryEnabled).toBe(true);
+
+    const persisted = JSON.parse(storage.inspect()[SETTINGS_STORAGE_KEY]!);
+    expect(persisted.telemetryEnabled).toBe(true);
+
+    const b = createSettingsStore({ storage });
+    expect(b.getState().telemetryEnabled).toBe(true);
+  });
+
+  it("toggle off round-trips; coerced to boolean from non-boolean input", () => {
+    const store = createSettingsStore({ storage: createMockStorage() });
+    store.getState().setTelemetryEnabled(true);
+    store.getState().setTelemetryEnabled(false);
+    expect(store.getState().telemetryEnabled).toBe(false);
+
+    // Coercion: truthy non-bool → true, falsy → false (mirrors setHaikuEnabled).
+    // @ts-expect-error — defensive runtime path.
+    store.getState().setTelemetryEnabled(1);
+    expect(store.getState().telemetryEnabled).toBe(true);
+    // @ts-expect-error
+    store.getState().setTelemetryEnabled(0);
+    expect(store.getState().telemetryEnabled).toBe(false);
+  });
+});
+
+describe("SS-S43: v1 migration zero-fills telemetryEnabled to false", () => {
+  it("v1 payload (no telemetry field) lifts into v2 with telemetryEnabled = false", () => {
+    const storage = createMockStorage({
+      [LEGACY_SETTINGS_STORAGE_KEY]: JSON.stringify({
+        haikuConfidenceCutoff: 0.9,
+        // no telemetryEnabled
+      }),
+    });
+    const store = createSettingsStore({ storage });
+    expect(store.getState().telemetryEnabled).toBe(false);
+    const persisted = JSON.parse(storage.inspect()[SETTINGS_STORAGE_KEY]!);
+    expect(persisted.telemetryEnabled).toBe(false);
+  });
+
+  it("malformed telemetryEnabled value coerces to default (false)", () => {
+    const storage = createMockStorage({
+      [SETTINGS_STORAGE_KEY]: JSON.stringify({
+        telemetryEnabled: "yes please",
+      }),
+    });
+    const store = createSettingsStore({ storage });
+    expect(store.getState().telemetryEnabled).toBe(false);
   });
 });

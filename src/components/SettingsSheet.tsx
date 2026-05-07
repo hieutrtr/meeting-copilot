@@ -48,9 +48,11 @@ export function SettingsSheet({
   const sttProvider = useSettingsStore((s) => s.sttProvider);
   const apiKeys = useSettingsStore((s) => s.apiKeys);
   const privacyMode = useSettingsStore((s) => s.privacyMode);
+  const telemetryEnabled = useSettingsStore((s) => s.telemetryEnabled);
   const setSttProvider = useSettingsStore((s) => s.setSttProvider);
   const setApiKey = useSettingsStore((s) => s.setApiKey);
   const setPrivacyMode = useSettingsStore((s) => s.setPrivacyMode);
+  const setTelemetryEnabled = useSettingsStore((s) => s.setTelemetryEnabled);
 
   const needsKey = requiresApiKey(sttProvider);
   const apiKeyProvider: ApiKeyProvider | null = needsKey
@@ -259,6 +261,32 @@ export function SettingsSheet({
           aria-live="polite"
         >
           {pill.status === "idle" ? "" : pill.message}
+        </span>
+      </div>
+
+      <div
+        className="settings-sheet__row settings-sheet__telemetry-row"
+        data-testid="settings-telemetry-row"
+      >
+        <label
+          htmlFor="settings-telemetry-toggle"
+          className="settings-sheet__label"
+        >
+          Telemetry
+        </label>
+        <input
+          id="settings-telemetry-toggle"
+          data-testid="settings-telemetry-toggle"
+          type="checkbox"
+          checked={telemetryEnabled}
+          onChange={(e) => setTelemetryEnabled(e.target.checked)}
+        />
+        <span
+          data-testid="settings-telemetry-hint"
+          className="settings-sheet__hint"
+        >
+          Local-only operational log (provider switches, errors, latency). No
+          transcript or audio. Off by default.
         </span>
       </div>
     </section>

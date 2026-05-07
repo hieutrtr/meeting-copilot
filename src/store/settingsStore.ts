@@ -106,6 +106,11 @@ export interface SettingsValues {
   // Phase 3 T-3.8 addition — ARCH §11 privacy mode. Default `"local-first"`
   // (audio never leaves the machine) per the plan note "opt-in cloud explicit".
   privacyMode: PrivacyMode;
+  // Phase 3 T-3.9 addition — opt-in local telemetry log (provider switches,
+  // errors, latencies). Default `false` per AC: the user must explicitly
+  // turn this on. The append loop reads this flag on EVERY event so toggling
+  // takes effect on the next provider event with no restart.
+  telemetryEnabled: boolean;
 }
 
 export interface SettingsState extends SettingsValues {
@@ -120,6 +125,8 @@ export interface SettingsState extends SettingsValues {
   // Phase 3 T-3.8 addition — auto-reverts `sttProvider` to the LCM allowed
   // provider (`"mlx"`) when the requested mode disallows the current pick.
   setPrivacyMode: (mode: PrivacyMode) => void;
+  // Phase 3 T-3.9 addition — opt-in telemetry toggle.
+  setTelemetryEnabled: (b: boolean) => void;
   reset: () => void;
 }
 
@@ -138,6 +145,7 @@ export const SETTINGS_DEFAULTS: SettingsValues = {
   sttProvider: "mlx",
   apiKeys: { deepgram: "", elevenlabs: "" },
   privacyMode: DEFAULT_PRIVACY_MODE,
+  telemetryEnabled: false,
 };
 
 function clamp(n: number, lo: number, hi: number): number {
@@ -192,6 +200,10 @@ function coerceLoaded(raw: unknown): SettingsValues {
     privacyMode: isPrivacyMode(r.privacyMode)
       ? r.privacyMode
       : SETTINGS_DEFAULTS.privacyMode,
+    telemetryEnabled:
+      typeof r.telemetryEnabled === "boolean"
+        ? r.telemetryEnabled
+        : SETTINGS_DEFAULTS.telemetryEnabled,
   };
 }
 
@@ -271,6 +283,7 @@ function pickValues(s: SettingsValues): SettingsValues {
     sttProvider: s.sttProvider,
     apiKeys: { ...s.apiKeys },
     privacyMode: s.privacyMode,
+    telemetryEnabled: s.telemetryEnabled,
   };
 }
 
@@ -334,6 +347,10 @@ export function createSettingsStore(
       } else {
         set({ privacyMode: mode });
       }
+      persistToStorage(storage, key, pickValues(get()));
+    },
+    setTelemetryEnabled: (b: boolean) => {
+      set({ telemetryEnabled: !!b });
       persistToStorage(storage, key, pickValues(get()));
     },
     reset: () => {
