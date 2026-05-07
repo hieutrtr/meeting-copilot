@@ -66,9 +66,11 @@ impl Default for BackoffConfig {
 
 impl BackoffConfig {
     /// Apply the multiplier-and-cap rule once. Pure (no sleep, no I/O) so this is the
-    /// unit-test seam for the backoff schedule.
+    /// unit-test seam for the backoff schedule. Result is rounded to whole milliseconds —
+    /// `Duration::mul_f32` produces sub-microsecond f32 noise on otherwise-round inputs
+    /// (e.g. `100ms × 2.0 = 200.000003ms`) which sleep can't honour anyway.
     pub fn next_delay(&self, current: Duration) -> Duration {
-        let scaled = current.mul_f32(self.multiplier.max(1.0));
+        let scaled = round_to_ms(current.mul_f32(self.multiplier.max(1.0)));
         if scaled > self.max_delay {
             self.max_delay
         } else {
@@ -78,7 +80,7 @@ impl BackoffConfig {
 
     /// Apply jitter in `[1-j, 1+j]` to `d`. Deterministic for `jitter == 0.0`.
     /// `pseudo_unit_sample` is in `[0.0, 1.0]` — the caller injects randomness so this
-    /// helper stays pure and testable.
+    /// helper stays pure and testable. Rounded to whole milliseconds (see `next_delay`).
     pub fn jittered(&self, d: Duration, pseudo_unit_sample: f32) -> Duration {
         let j = self.jitter.clamp(0.0, 1.0);
         if j == 0.0 {
@@ -86,8 +88,19 @@ impl BackoffConfig {
         }
         let s = pseudo_unit_sample.clamp(0.0, 1.0);
         let factor = (1.0 - j) + (s * 2.0 * j); // ∈ [1-j, 1+j]
-        d.mul_f32(factor)
+        round_to_ms(d.mul_f32(factor))
     }
+}
+
+/// Round a Duration to the nearest whole millisecond. `Duration::mul_f32` produces
+/// sub-microsecond f32 quantisation noise on otherwise-round inputs (e.g.
+/// `100ms × 2.0` resolves to `200.000003ms` instead of `200ms`). `thread::sleep`
+/// cannot honour sub-millisecond precision anyway, and downstream tests assert
+/// against `Duration::from_millis(_)` literals — so collapse to ms at the source.
+fn round_to_ms(d: Duration) -> Duration {
+    let nanos = d.as_nanos();
+    let ms = (nanos + 500_000) / 1_000_000;
+    Duration::from_millis(ms.min(u64::MAX as u128) as u64)
 }
 
 /// Cheap pseudo-random unit sample in `[0.0, 1.0]` derived from the system clock — good

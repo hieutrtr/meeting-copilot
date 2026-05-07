@@ -185,8 +185,22 @@ impl DeepgramAdapter {
             .map_err(|e| SttError::Config(format!("auth header value: {e}")))?;
         req.headers_mut().insert("Authorization", value);
 
-        let (sock, _resp) = tungstenite::connect(req)
-            .map_err(|e| SttError::Io(format!("ws connect: {e}")))?;
+        let (sock, _resp) = tungstenite::connect(req).map_err(|e| match &e {
+            // Typo / shape errors (bad scheme, no host, …) surface from
+            // tungstenite *after* `into_client_request` succeeds — the
+            // request parser is lax and the connect-side validates. Route
+            // those to `Config` so `connect_with_backoff` doesn't burn the
+            // retry budget on a user-actionable typo. `UnableToConnect`
+            // is a transient transport failure (DNS / refused / unreachable)
+            // and stays on the `Io` retry path.
+            tungstenite::Error::Url(url_err) => match url_err {
+                tungstenite::error::UrlError::UnableToConnect(_) => {
+                    SttError::Io(format!("ws connect: {e}"))
+                }
+                _ => SttError::Config(format!("invalid url {}: {e}", self.config.url)),
+            },
+            _ => SttError::Io(format!("ws connect: {e}")),
+        })?;
         Ok(sock)
     }
 

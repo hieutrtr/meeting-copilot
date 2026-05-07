@@ -667,9 +667,23 @@ mod tests {
         state.register_channel("m_1", tx.clone());
         let app = router(state.clone());
 
-        // Push three events BEFORE the request lands so they are queued
-        // in the broadcast channel. Drop the sender after to close the
-        // stream so `to_bytes` finishes deterministically.
+        // Issue the request first so the SSE handler subscribes to the
+        // broadcast channel BEFORE we send. tokio::broadcast has no
+        // backlog replay — subscribers only see messages sent after they
+        // subscribe — so events queued before `oneshot.await` returns
+        // (handler runs sync up to the response) would otherwise be lost.
+        let resp = app
+            .oneshot(sse_request(
+                "m_1",
+                Some(&token.to_string()),
+                Some(DEFAULT_ALLOWED_ORIGIN),
+            ))
+            .await
+            .expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Now send the three events into the live subscription, then
+        // close so `to_bytes` finishes deterministically.
         tx.send(EmbedEvent::TranscriptChunk {
             chunk_id: "c1".into(),
             speaker: "alice".into(),
@@ -692,15 +706,6 @@ mod tests {
         })
         .expect("send 3");
 
-        let resp = app
-            .oneshot(sse_request(
-                "m_1",
-                Some(&token.to_string()),
-                Some(DEFAULT_ALLOWED_ORIGIN),
-            ))
-            .await
-            .expect("oneshot");
-        assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
             resp.headers()
                 .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
