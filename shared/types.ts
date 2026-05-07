@@ -75,3 +75,23 @@ export interface Utterance {
   endTs: number;
   chunkIds: string[];
 }
+
+// Phase 4 T-4.2 — MCP tool surface re-export. The Zod-derived inferred types
+// live in `src/mcp/tools.ts`; we re-export the TS shapes here so cross-crate
+// consumers (Rust serde via shared/types.ts mirror, future dashboard embed)
+// can `import { McpStartInput, ... } from "@shared/types"`.
+export type {
+  ErrorCode as McpErrorCode,
+  ToolName as McpToolName,
+  ToolResult as McpToolResult,
+  InstallInput as McpInstallInput,
+  InstallOutput as McpInstallOutput,
+  StartInput as McpStartInput,
+  StartOutput as McpStartOutput,
+  StatusInput as McpStatusInput,
+  StatusOutput as McpStatusOutput,
+  StopInput as McpStopInput,
+  StopOutput as McpStopOutput,
+  ExportInput as McpExportInput,
+  ExportOutput as McpExportOutput,
+} from "../src/mcp/tools";

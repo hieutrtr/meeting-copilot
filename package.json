@@ -4,20 +4,27 @@
   "version": "0.0.0",
   "description": "Meeting Copilot — Phase 0 scaffold (T-0.8). See docs/IMPLEMENTATION-PLAN.md.",
   "type": "module",
+  "bin": {
+    "meeting-copilot-mcp": "src/mcp/bin.ts"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "mcp-server": "bun run src/mcp/bin.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.40.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
     "@tauri-apps/api": "^2.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
+    "zod": "^3.23.0",
+    "zod-to-json-schema": "^3.25.0",
     "zustand": "^5.0.13"
   },
   "devDependencies": {
