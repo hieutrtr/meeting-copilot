@@ -123,6 +123,33 @@ User chọn provider qua Settings UI; switch provider không cần restart app �
 
 ---
 
+### 3.4 Phase 3 update — Provider trait + factory (T-3.1..T-3.4)
+
+> Append-only addendum landed in Phase 3 (`docs/tasks/phase-3/T-3.1` … `T-3.4`). The §3.1–§3.3 wording above is the canonical interface spec; this block describes the runtime locations + Phase 3-specific deltas.
+
+**Trait + factory live in Rust:**
+
+- `crates/stt-mlx/src/providers/mod.rs` — declares `pub trait SttProvider`, `enum ProviderKind { Mlx, Deepgram, Elevenlabs, Fake }`, `enum FactoryError`, and `pub fn factory(kind: ProviderKind, cfg: ProviderConfig) -> Result<Box<dyn SttProvider>, FactoryError>`.
+- `crates/stt-mlx/src/providers/mlx.rs` — MLX impl (T-3.1 relocated this from `crates/stt-mlx/src/mlx.rs`; behavior byte-identical, Phase 1+2 cargo tests stay green).
+- `crates/stt-mlx/src/providers/deepgram.rs` — Deepgram WebSocket adapter (T-3.2). Endpoint `wss://api.deepgram.com/v1/listen?model=nova-2&encoding=linear16&sample_rate=16000&interim_results=true` is a literal constant in the adapter; drift gated by mocked-WebSocket structural tests in `providers::deepgram::tests`.
+- `crates/stt-mlx/src/providers/elevenlabs.rs` — ElevenLabs Scribe streaming adapter (T-3.4). Endpoint `wss://api.elevenlabs.io/v1/speech-to-text/scribe-v1/stream`, `xi-api-key` handshake header.
+- `crates/stt-mlx/src/providers/backoff.rs` — `BackoffConfig` with jittered exponential schedule (T-3.3). Reused by both Deepgram and ElevenLabs adapters; `tungstenite = 0.21` is the only new transport dep.
+- `crates/stt-mlx/src/providers/privacy.rs` — adds `factory_with_privacy(mode, kind, cfg)` (T-3.8) that short-circuits **before** `factory()` runs with `FactoryError::PrivacyModeViolation { mode, kind }` if the (mode, provider) pair is disallowed. See §11.x.
+
+**Reconnect contract (T-3.3):** exponential backoff with jitter; max 3 retries within 10 s; default schedule bounded ~750 ms worst-case (well under the AC). After 3 failures the adapter emits `SttError::ProviderUnavailable { attempts, last_error }`; the UI surfaces a typed-error toast (recommend dropping back to MLX). The variant is additive — existing match arms in test code stay green.
+
+**Failure modes per provider:**
+
+- **Missing API key** (Deepgram / ElevenLabs) → `SttError::Config` at construction; UI greys out the picker option; "Test connection" returns a typed error.
+- **Network unavailable mid-stream** → `SttError::ProviderUnavailable` after the 3-strike rule; auto-revert to MLX is a Phase 3.x candidate.
+- **Privacy mode violation** → `FactoryError::PrivacyModeViolation` short-circuits before construction; cannot be bypassed by skipping UI checks.
+
+**Test coverage delta (Phase 3 net new):** 8 factory tests (T-3.1) + 19 Deepgram tests (T-3.2 + T-3.3) + 15 ElevenLabs Scribe tests (T-3.4) + 10 privacy tests (T-3.8). Cargo re-verify on a host with `cargo` installed is the carry-forward AC (loop sandbox blocked-action #3).
+
+**Cross-references:** `docs/provider-comparison.md` (per-provider table + setup steps), `src/llm/sttPricing.ts` (pricing constants pinned to §3.2 lines 113 + 119).
+
+---
+
 ## 4. TTS — Pluggable Provider (v2 optional)
 
 V1 không bật TTS mặc định (answer là text trên UI). V2 cho phép user bật "spoken answer" cho hands-free mode.
@@ -138,6 +165,35 @@ interface TTSProvider {
 - **ElevenLabs**: `eleven_turbo_v2` streaming, latency < 400ms.
 
 Output đẩy vào virtual output device (BlackHole "input") để Zoom/Meet pickup được nếu user muốn answer được phát qua mic ảo (use case: AI nói thay user trong meeting). Default: chỉ phát ra speaker local.
+
+---
+
+### 4.1 Phase 3 update — TTS feature flag (T-3.7)
+
+> Append-only addendum. The §4 paragraphs above stay the canonical reference for interface + audio routing; this block describes the Phase 3 runtime gating.
+
+TTS ships **behind two feature flags** so default builds neither compile nor download TTS code:
+
+1. **Rust:** cargo feature `tts` (default OFF) declared in `crates/stt-mlx/Cargo.toml`. The entire `crates/stt-mlx/src/tts/` module is `#[cfg(feature = "tts")]` and adds **zero new dependencies** (`reqwest` is intentionally not pulled in — the `TtsTransport` seam is HTTP-client-injected so default builds dead-strip the module).
+2. **TS:** `VITE_ENABLE_TTS` env var (default missing → false), read by `src/tts/featureFlag.ts`. The `<AnswerPanel/>` "Speak answer" button is rendered iff the optional `onSpeak` prop is passed; `App.tsx` passes the prop iff `ENABLE_TTS && isTtsAllowed(privacyMode)`. A dynamic `import()` keeps the TTS modules out of the default Vite bundle.
+
+**Implementation locations:**
+
+- `crates/stt-mlx/src/tts/provider.rs` — `TtsProvider` trait + `TtsAudioChunk` + `TtsSpeakOptions` + `TtsError`. Object-safe; transport-injected via `TtsTransport`.
+- `crates/stt-mlx/src/tts/elevenlabs.rs` — `ElevenLabsTtsAdapter`. Endpoint `POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream?output_format=pcm_16000`, `xi-api-key` header (same env var as Scribe).
+- `src/tts/ttsProvider.ts` — TS interface verbatim from §4 above.
+- `src/tts/elevenLabsTts.ts` — TS adapter; `fetch` is prop-injected for testability.
+- `src/components/AnswerPanel.tsx` — `<AnswerPanel/>` adds an optional `onSpeak?` prop; the Speak button has no DOM presence when the prop is undefined.
+
+**Default voice:** voice ID is constructor-supplied; the UI does not surface a voice picker (model knobs deferred to Phase 3.x).
+
+**Privacy gating** (cross-ref §11.x): even with both feature flags ON, Local-first mode does not allow TTS — `isTtsAllowed("local-first") === false` in `src/privacy/privacyMode.ts`.
+
+**Click → first audio target:** < 2 000 ms from button-click to "speaking" state flip. Test gate: `AnswerPanel.test.tsx` AP-S15 (jsdom wall-clock budget); live-host audio-start latency verified in `PHASE-BROWSER-TEST.md`.
+
+**BlackHole virtual-output routing** (§4 paragraph above) **stays a v2 deliverable.** Phase 3 ships local-speaker output only.
+
+**Test coverage delta:** 7 feature-flag tests (TF-S1..S7) + 13 ElevenLabs TTS adapter tests (EL-S1..S8b) + 6 AnswerPanel button tests (AP-S13..S16b) + 14 Rust adapter tests under `tts::elevenlabs::tests` + 6 trait-shape Rust tests in `tts::provider`.
 
 ---
 
@@ -408,6 +464,37 @@ User có thể disable transmit transcript với câu chứa "off the record" tr
 
 ---
 
+### 11.1 Phase 3 update — Privacy mode constraint enforcement (T-3.8)
+
+> Append-only addendum. The §11 mode table above stays the canonical reference for what each mode means; this block describes how Phase 3 enforces the constraint at runtime.
+
+**Default mode is `"local-first"`** (privacy-by-default). Persisted in the settings store at the v2 schema (`meeting-copilot:settings:v2.privacyMode`); legacy v1 keys zero-fill on first read.
+
+**Single source of truth (TS):** `src/privacy/privacyMode.ts`.
+
+- Exports: `PrivacyMode` type, `PRIVACY_MODES`, `DEFAULT_PRIVACY_MODE`, `isPrivacyMode`, `isSttProviderAllowed`, `isTtsAllowed`, `availableSttProviders`, `tooltipFor`, `fallbackSttProviderFor`, `labelForPrivacyMode`.
+- Pure (zero deps on React / zustand / DOM); 29 unit tests covering the 3-mode × 3-STT-provider matrix + TTS allowed-set + tooltip wording.
+
+**Backend mirror (Rust):** `crates/stt-mlx/src/providers/privacy.rs`.
+
+- `factory_with_privacy(mode, kind, cfg)` short-circuits **before** `factory()` runs with `FactoryError::PrivacyModeViolation { mode, kind }` if the (mode, provider) pair is disallowed.
+- The `is_provider_allowed` match is exhaustive — adding a new `ProviderKind` becomes a compile error.
+- 10 cargo tests pin TS↔Rust string parity for `"local-first" | "cloud" | "mixed"` and prove the privacy gate beats `SttError::Config` (a missing API key under a disallowed mode surfaces `PrivacyModeViolation`, never the config error).
+
+**Auto-revert on mode change:** when the picker switches modes, the settings store auto-reverts the STT provider to the mode's fallback (`fallbackSttProviderFor`) in the same `set()` call — disallowed providers cannot persist across a mode flip.
+
+**Cloud consent banner:** `<CloudConsentBanner/>` (red, `role="alert"`) mounts above `<TranscriptView/>` iff `privacyMode === "cloud"`. Wording is verbatim from §11 ("Cloud mode" row + "Banner đỏ ở top transcript khi đang ở Cloud mode để user nhớ obtain consent từ participants"). Local-first / Mixed render none.
+
+**TTS gating:** the Speak button is rendered iff `ENABLE_TTS && isTtsAllowed(privacyMode)` — three layers (cargo feature, Vite env, privacy mode) must all pass.
+
+**Out of scope for Phase 3 (still v2):**
+
+- "Off the record" 30-s drop window described in §11 final paragraph above.
+- Per-segment `disableTransmit` toggle on individual transcript chunks.
+- Privacy-mode lock during a meeting (Phase 3 allows mid-meeting mode flips — auto-revert covers the constraint, but the cost meter attributes correctly per segment).
+
+---
+
 ## 12. Latency Budget
 
 Target end-to-end (audio → first answer token) < 3 giây.
@@ -445,6 +532,81 @@ Note:
 - Heavy meeting (30 questions/hour) tăng chi phí Answer LLM tỉ lệ thuận.
 
 UI hiển thị live cost meter + monthly forecast dựa trên session pattern user.
+
+---
+
+## 14. Telemetry — Phase 3 update (T-3.9)
+
+> NEW section landed in Phase 3. Telemetry was not part of the Phase 1+2 architecture; this section is additive, not a rewrite.
+
+Telemetry is **opt-in only**, **local-only** (no remote endpoint), and **PII-scrubbed** at write time. It exists to help the user (and the dev team during install/support) understand provider switch frequency, error rates, and latency distributions — never to capture meeting content.
+
+### 14.1 Opt-in default
+
+`telemetryEnabled = false` by default in the settings store (`src/store/settingsStore.ts`). The Settings sheet exposes a single checkbox row (`data-testid="settings-telemetry-toggle"`); flipping it ON is the only path to enable telemetry. The flag is read live (no restart needed), so a user can disable mid-meeting and subsequent appends become no-ops.
+
+### 14.2 Event types
+
+Three event types only:
+
+- **`provider_switch`** — emitted when the user changes STT provider via the picker. Fields: `fromProvider`, `toProvider`, `privacyMode`, `latencyMs` (UI commit time).
+- **`stt_error`** — emitted when the adapter surfaces a typed error. Fields: `provider`, `errorCode`, `result`, `latencyMs`.
+- **`stt_latency`** — emitted on a sampled cadence to record per-provider partial-transcript latency. Fields: `provider`, `latencyMs`, `bucket`.
+
+No event type carries text, audio, or transcript content. Adding a new event type requires extending the allow-list in `src/telemetry/scrub.ts` (which forces a privacy review).
+
+### 14.3 PII scrub (`src/telemetry/scrub.ts`)
+
+A pure scrubber gates every event before it reaches the sink:
+
+- `FORBIDDEN_KEYS = { text, transcript, pcm, audio, apiKey, api_key, key, secret, token, password }` — fixed list; any event that contains one of these top-level keys (case-insensitive) is **dropped in its entirety** (no partial logging).
+- Allow-list of top-level event fields: an event with a key not in `ALLOWED_KEYS` is also dropped — the schema fails closed against future drift.
+- Test gate: `src/telemetry/telemetryLog.test.ts` TM-S13 feeds 100 mixed events including booby-trapped keys, asserts `containsForbiddenKey(line) === false` over every persisted line.
+
+### 14.4 Rotation (`src/telemetry/sinks.ts`)
+
+The default sink is in-memory (Phase 3 unit gate). UTF-8 byte counted; rotates at `DEFAULT_TELEMETRY_MAX_BYTES = 10_000_000` (10 MB). Up to `maxFiles = 3` archives → ~30 MB worst-case.
+
+The `TelemetrySink` interface lets a future Tauri-fs adapter swap in without changing call sites. That wire-up is **Phase 3.x deferred**.
+
+### 14.5 Out of scope for Phase 3
+
+- **Tauri-fs sink + live wire-up** to the provider event stream — the AC was the calculator + scrub + rotate cadence, not the persistent on-disk log.
+- **Remote telemetry submission** — there is no remote endpoint and no plan for one in v1. The "telemetry" name is local-only.
+- **Per-meeting reset** — the factory ships; consumers construct their own. The future singleton owner lives in App.tsx (paralleling `costGuard`).
+
+---
+
+## 15. Cost Meter — Phase 3 update (T-3.5)
+
+> NEW section. Phase 1+2 had `costGuard` (meeting-wide ledger + soft/hard threshold); Phase 3 adds the per-provider STT cost meter that feeds it.
+
+### 15.1 Per-provider rate table (`src/llm/sttPricing.ts`)
+
+Constants pinned to ARCH §3.2 lines 113 + 119:
+
+```
+STT_PROVIDER_RATES = {
+  mlx:        { kind: "free" }                      // $0
+  fake:       { kind: "free" }                      // $0 — test stub
+  deepgram:   { kind: "per-minute", rate: 0.0043 }  // $0.0043 / min
+  elevenlabs: { kind: "per-hour",   rate: 0.40   }  // $0.40 / hour
+}
+```
+
+Provider IDs match `ProviderKind::as_str()` exactly — parity gated by `sttPricing.test.ts` ST-S9.
+
+### 15.2 Calculator (`src/cost/sttCostMeter.ts`)
+
+Exposes `onUpdate` event sink + cumulative session cost + per-provider attribution. Provider-switch ladders attribute correctly to each segment (test gate: SCM-S7, four-phase ladder MLX→Deepgram→MLX→ElevenLabs).
+
+### 15.3 Stream wiring (`src/cost/attachSttCostMeter.ts`)
+
+A thin seam that wires the meter into the existing Phase 1 T-1.6 `transcript:chunk` Tauri stream without modifying `subscribeTranscriptStream`. Test gate: `attachSttCostMeter.test.ts` AS-S1..S3.
+
+### 15.4 UI
+
+Cost-meter UI surfaces both **session-cumulative** and **projected $/h** in the Settings sheet sidebar. The Phase 2 `costGuard` threshold logic is reused — no new threshold semantics.
 
 ---
 
