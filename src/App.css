@@ -235,3 +235,25 @@
 .settings-sheet__pill--pending { background: #fff5d4; color: #826200; }
 .settings-sheet__pill--success { background: #d6f5dc; color: #146c28; }
 .settings-sheet__pill--fail { background: #ffd6d6; color: #a3252e; }
+
+/* Phase 3 T-3.8 — Privacy mode picker + Cloud consent banner */
+.settings-sheet__privacy-row {
+  border-bottom: 1px dashed #e0e0e0;
+  padding-bottom: 0.6rem;
+  margin-bottom: 0.4rem;
+}
+
+.settings-sheet__privacy-summary {
+  font-size: 0.8rem;
+  color: #6b6b6b;
+}
+
+.cloud-consent-banner {
+  background: #c0392b;
+  color: white;
+  padding: 0.7rem 0.95rem;
+  border-radius: 6px;
+  margin: 0.6rem 0;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}

@@ -9,6 +9,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { STT_PROVIDER_IDS, type SttProviderId } from "../llm/sttPricing";
 import {
+  PRIVACY_MODES,
+  isSttProviderAllowed,
+  labelForPrivacyMode,
+  tooltipFor,
+  type PrivacyMode,
+} from "../privacy/privacyMode";
+import {
   defaultTestSttConnection,
   envVarFor,
   labelFor,
@@ -40,8 +47,10 @@ export function SettingsSheet({
 }: SettingsSheetProps) {
   const sttProvider = useSettingsStore((s) => s.sttProvider);
   const apiKeys = useSettingsStore((s) => s.apiKeys);
+  const privacyMode = useSettingsStore((s) => s.privacyMode);
   const setSttProvider = useSettingsStore((s) => s.setSttProvider);
   const setApiKey = useSettingsStore((s) => s.setApiKey);
+  const setPrivacyMode = useSettingsStore((s) => s.setPrivacyMode);
 
   const needsKey = requiresApiKey(sttProvider);
   const apiKeyProvider: ApiKeyProvider | null = needsKey
@@ -66,6 +75,14 @@ export function SettingsSheet({
       setSttProvider(next);
     },
     [setSttProvider],
+  );
+
+  const onPrivacyModeChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const next = e.target.value as PrivacyMode;
+      setPrivacyMode(next);
+    },
+    [setPrivacyMode],
   );
 
   const onApiKeyChange = useCallback(
@@ -97,9 +114,24 @@ export function SettingsSheet({
 
   const providerOptions = useMemo(
     () =>
-      STT_PROVIDER_IDS.map((id) => ({
-        id,
-        label: labelFor(id),
+      STT_PROVIDER_IDS.map((id) => {
+        const allowed = isSttProviderAllowed(privacyMode, id);
+        const tip = allowed ? null : tooltipFor(privacyMode, id);
+        return {
+          id,
+          label: labelFor(id),
+          disabled: !allowed,
+          title: tip,
+        };
+      }),
+    [privacyMode],
+  );
+
+  const privacyModeOptions = useMemo(
+    () =>
+      PRIVACY_MODES.map((mode) => ({
+        id: mode,
+        label: labelForPrivacyMode(mode),
       })),
     [],
   );
@@ -111,6 +143,39 @@ export function SettingsSheet({
       data-testid="settings-sheet"
     >
       <h2 className="settings-sheet__heading">Settings</h2>
+
+      <div className="settings-sheet__row settings-sheet__privacy-row">
+        <label
+          htmlFor="settings-privacy-mode-select"
+          className="settings-sheet__label"
+        >
+          Privacy Mode
+        </label>
+        <select
+          id="settings-privacy-mode-select"
+          data-testid="settings-privacy-mode-select"
+          aria-label="Privacy mode"
+          value={privacyMode}
+          onChange={onPrivacyModeChange}
+          className="settings-sheet__select"
+        >
+          {privacyModeOptions.map((opt) => (
+            <option key={opt.id} value={opt.id}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+        <span
+          data-testid="settings-privacy-mode-summary"
+          className="settings-sheet__privacy-summary"
+        >
+          {privacyMode === "local-first"
+            ? "Audio stays local. Only MLX is selectable."
+            : privacyMode === "cloud"
+              ? "Cloud STT + TTS unlocked. Consent banner active."
+              : "Local STT, cloud TTS allowed."}
+        </span>
+      </div>
 
       <div className="settings-sheet__row">
         <label
@@ -127,8 +192,15 @@ export function SettingsSheet({
           className="settings-sheet__select"
         >
           {providerOptions.map((opt) => (
-            <option key={opt.id} value={opt.id}>
+            <option
+              key={opt.id}
+              value={opt.id}
+              disabled={opt.disabled}
+              title={opt.title ?? undefined}
+              data-testid={`settings-provider-option-${opt.id}`}
+            >
               {opt.label}
+              {opt.disabled ? " — disabled" : ""}
             </option>
           ))}
         </select>

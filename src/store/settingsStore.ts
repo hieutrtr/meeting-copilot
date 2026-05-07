@@ -46,6 +46,13 @@ import {
 import { DEFAULT_SILENCE_MS } from "../detector/sliding-window";
 import type { HaikuClassification } from "../llm/haikuFilter";
 import { isSttProviderId, type SttProviderId } from "../llm/sttPricing";
+import {
+  DEFAULT_PRIVACY_MODE,
+  fallbackSttProviderFor,
+  isPrivacyMode,
+  isSttProviderAllowed,
+  type PrivacyMode,
+} from "../privacy/privacyMode";
 
 export const SETTINGS_STORAGE_KEY = "meeting-copilot:settings:v2" as const;
 export const LEGACY_SETTINGS_STORAGE_KEY = "meeting-copilot:settings:v1" as const;
@@ -96,6 +103,9 @@ export interface SettingsValues {
   // Phase 3 T-3.6 additions
   sttProvider: SttProviderId;
   apiKeys: SettingsApiKeys;
+  // Phase 3 T-3.8 addition — ARCH §11 privacy mode. Default `"local-first"`
+  // (audio never leaves the machine) per the plan note "opt-in cloud explicit".
+  privacyMode: PrivacyMode;
 }
 
 export interface SettingsState extends SettingsValues {
@@ -107,6 +117,9 @@ export interface SettingsState extends SettingsValues {
   // Phase 3 T-3.6 additions
   setSttProvider: (provider: SttProviderId) => void;
   setApiKey: (provider: ApiKeyProvider, key: string) => void;
+  // Phase 3 T-3.8 addition — auto-reverts `sttProvider` to the LCM allowed
+  // provider (`"mlx"`) when the requested mode disallows the current pick.
+  setPrivacyMode: (mode: PrivacyMode) => void;
   reset: () => void;
 }
 
@@ -124,6 +137,7 @@ export const SETTINGS_DEFAULTS: SettingsValues = {
   costGuardPaused: false,
   sttProvider: "mlx",
   apiKeys: { deepgram: "", elevenlabs: "" },
+  privacyMode: DEFAULT_PRIVACY_MODE,
 };
 
 function clamp(n: number, lo: number, hi: number): number {
@@ -175,6 +189,9 @@ function coerceLoaded(raw: unknown): SettingsValues {
       ? r.sttProvider
       : SETTINGS_DEFAULTS.sttProvider,
     apiKeys: coerceApiKeys(r.apiKeys),
+    privacyMode: isPrivacyMode(r.privacyMode)
+      ? r.privacyMode
+      : SETTINGS_DEFAULTS.privacyMode,
   };
 }
 
@@ -253,6 +270,7 @@ function pickValues(s: SettingsValues): SettingsValues {
     costGuardPaused: s.costGuardPaused,
     sttProvider: s.sttProvider,
     apiKeys: { ...s.apiKeys },
+    privacyMode: s.privacyMode,
   };
 }
 
@@ -303,6 +321,19 @@ export function createSettingsStore(
       const current = get().apiKeys;
       const nextKeys: SettingsApiKeys = { ...current, [provider]: value };
       set({ apiKeys: nextKeys });
+      persistToStorage(storage, key, pickValues(get()));
+    },
+    setPrivacyMode: (mode: PrivacyMode) => {
+      if (!isPrivacyMode(mode)) return;
+      const current = get().sttProvider;
+      // Auto-revert: if the current STT provider is not allowed under the new
+      // mode, snap it back to the LCM provider in the same set() call so the
+      // UI re-render sees a consistent (mode, provider) pair.
+      if (!isSttProviderAllowed(mode, current)) {
+        set({ privacyMode: mode, sttProvider: fallbackSttProviderFor(mode) });
+      } else {
+        set({ privacyMode: mode });
+      }
       persistToStorage(storage, key, pickValues(get()));
     },
     reset: () => {

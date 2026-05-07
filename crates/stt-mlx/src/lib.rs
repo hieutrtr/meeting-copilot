@@ -47,7 +47,10 @@ pub mod providers;
 pub mod tts;
 
 pub use provider::{FakeStt, SttError, SttProvider, SttSegment};
-pub use providers::{factory, BackoffConfig, FactoryError, FakeConfig, ProviderConfig, ProviderKind};
+pub use providers::{
+    factory, factory_with_privacy, is_provider_allowed, BackoffConfig, FactoryError, FakeConfig,
+    PrivacyMode, ProviderConfig, ProviderKind,
+};
 
 #[cfg(feature = "mlx-runtime")]
 pub use providers::{MlxConfig, MlxWhisperSubprocess};

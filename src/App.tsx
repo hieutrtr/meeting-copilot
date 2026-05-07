@@ -3,6 +3,7 @@ import { useEffect, useMemo } from "react";
 import "./App.css";
 
 import { AnswerPanel } from "./components/AnswerPanel";
+import { CloudConsentBanner } from "./components/CloudConsentBanner";
 import { ContextLoader } from "./components/ContextLoader";
 import { MeetingControls } from "./components/MeetingControls";
 import { PastMeetings } from "./components/PastMeetings";
@@ -11,8 +12,10 @@ import { TranscriptView } from "./components/TranscriptView";
 import { useTranscriptStream } from "./hooks/useTranscriptStream";
 import { useAskClaude } from "./hooks/useAskClaude";
 import { useMeetingPersist } from "./hooks/useMeetingPersist";
+import { isTtsAllowed } from "./privacy/privacyMode";
 import { useContextStore } from "./store/contextStore";
 import { useQuestionStore } from "./store/questionStore";
+import { useSettingsStore } from "./store/settingsStore";
 import { ENABLE_TTS } from "./tts/featureFlag";
 
 const RECENT_TRANSCRIPT_CHUNK_COUNT = 12;
@@ -52,6 +55,7 @@ export default function App() {
   const { chunks } = useTranscriptStream();
   const contextContent = useContextStore((s) => s.content);
   const latestQuestion = useQuestionStore((s) => s.questions[0] ?? null);
+  const privacyMode = useSettingsStore((s) => s.privacyMode);
   const { status, text, error, usage, costUsd, cacheReadRatio, ask } = useAskClaude();
 
   const recentTranscript = useMemo(
@@ -102,6 +106,7 @@ export default function App() {
 
       <ContextLoader />
       <MeetingControls chunks={chunks} />
+      {privacyMode === "cloud" ? <CloudConsentBanner /> : null}
       <TranscriptView chunks={chunks} />
       <AnswerPanel
         status={status}
@@ -110,7 +115,9 @@ export default function App() {
         usage={usage}
         costUsd={costUsd}
         cacheReadRatio={cacheReadRatio}
-        onSpeak={ENABLE_TTS ? speakAnswer : undefined}
+        onSpeak={
+          ENABLE_TTS && isTtsAllowed(privacyMode) ? speakAnswer : undefined
+        }
       />
       <PastMeetings />
       <details className="settings-sheet__details">

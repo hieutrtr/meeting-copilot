@@ -311,6 +311,7 @@ function snapshotFor(overrides: Partial<SettingsState>): SettingsState {
     costGuardPaused: false,
     sttProvider: "mlx",
     apiKeys: { deepgram: "", elevenlabs: "" },
+    privacyMode: "local-first",
     setHaikuConfidenceCutoff: () => undefined,
     setHaikuEnabled: () => undefined,
     setSilenceThresholdMs: () => undefined,
@@ -318,6 +319,7 @@ function snapshotFor(overrides: Partial<SettingsState>): SettingsState {
     setCostGuardPaused: () => undefined,
     setSttProvider: () => undefined,
     setApiKey: () => undefined,
+    setPrivacyMode: () => undefined,
     reset: () => undefined,
   };
   return { ...base, ...overrides };
@@ -623,5 +625,95 @@ describe("SS-S35: SETTINGS_DEFAULTS shape includes v2 fields", () => {
     // v1 fields stay at the documented constants
     expect(SETTINGS_DEFAULTS.haikuConfidenceCutoff).toBe(0.7);
     expect(SETTINGS_DEFAULTS.haikuEnabled).toBe(true);
+  });
+});
+
+// ── Phase 3 T-3.8 — Privacy mode picker + auto-revert ───────────────────────
+
+describe("SS-S36: default privacyMode is 'local-first' (privacy by default)", () => {
+  it("defaults match SETTINGS_DEFAULTS.privacyMode and ARCH §11", () => {
+    const store = createSettingsStore({ storage: createMockStorage() });
+    expect(store.getState().privacyMode).toBe("local-first");
+    expect(SETTINGS_DEFAULTS.privacyMode).toBe("local-first");
+  });
+});
+
+describe("SS-S37: setPrivacyMode round-trip + persistence", () => {
+  it("updates state and persists to storage", () => {
+    const storage = createMockStorage();
+    const store = createSettingsStore({ storage });
+    store.getState().setPrivacyMode("cloud");
+    expect(store.getState().privacyMode).toBe("cloud");
+    const persisted = JSON.parse(storage.inspect()[SETTINGS_STORAGE_KEY]!);
+    expect(persisted.privacyMode).toBe("cloud");
+  });
+
+  it("survives recreate from same storage", () => {
+    const storage = createMockStorage();
+    const a = createSettingsStore({ storage });
+    a.getState().setPrivacyMode("mixed");
+    const b = createSettingsStore({ storage });
+    expect(b.getState().privacyMode).toBe("mixed");
+  });
+});
+
+describe("SS-S38: auto-revert when current STT provider becomes disallowed", () => {
+  it("Cloud→deepgram, switch to local-first → sttProvider snaps to 'mlx'", () => {
+    const storage = createMockStorage();
+    const store = createSettingsStore({ storage });
+    // Set up an allowed combination first
+    store.getState().setPrivacyMode("cloud");
+    store.getState().setSttProvider("deepgram");
+    expect(store.getState().sttProvider).toBe("deepgram");
+
+    // Switching to local-first must revert sttProvider to mlx in the same call
+    store.getState().setPrivacyMode("local-first");
+    expect(store.getState().privacyMode).toBe("local-first");
+    expect(store.getState().sttProvider).toBe("mlx");
+
+    // Persistence reflects the revert
+    const persisted = JSON.parse(storage.inspect()[SETTINGS_STORAGE_KEY]!);
+    expect(persisted.privacyMode).toBe("local-first");
+    expect(persisted.sttProvider).toBe("mlx");
+  });
+
+  it("Cloud→elevenlabs, switch to mixed → sttProvider snaps to 'mlx'", () => {
+    const store = createSettingsStore({ storage: createMockStorage() });
+    store.getState().setPrivacyMode("cloud");
+    store.getState().setSttProvider("elevenlabs");
+    store.getState().setPrivacyMode("mixed");
+    expect(store.getState().sttProvider).toBe("mlx");
+  });
+});
+
+describe("SS-S39: setPrivacyMode rejects unknown modes", () => {
+  it("bogus mode is a no-op", () => {
+    const store = createSettingsStore({ storage: createMockStorage() });
+    const before = store.getState().privacyMode;
+    expect(() =>
+      // @ts-expect-error — bogus mode value
+      store.getState().setPrivacyMode("offline"),
+    ).not.toThrow();
+    expect(store.getState().privacyMode).toBe(before);
+  });
+});
+
+describe("SS-S40: auto-revert is a no-op when current provider is still allowed", () => {
+  it("Cloud→mlx, switch to local-first → sttProvider stays mlx", () => {
+    const store = createSettingsStore({ storage: createMockStorage() });
+    store.getState().setPrivacyMode("cloud");
+    // Provider stays at default `mlx`
+    expect(store.getState().sttProvider).toBe("mlx");
+    store.getState().setPrivacyMode("local-first");
+    expect(store.getState().sttProvider).toBe("mlx");
+    expect(store.getState().privacyMode).toBe("local-first");
+  });
+
+  it("Cloud→deepgram, switch to cloud (no-op) → sttProvider stays deepgram", () => {
+    const store = createSettingsStore({ storage: createMockStorage() });
+    store.getState().setPrivacyMode("cloud");
+    store.getState().setSttProvider("deepgram");
+    store.getState().setPrivacyMode("cloud");
+    expect(store.getState().sttProvider).toBe("deepgram");
   });
 });

@@ -247,6 +247,124 @@ describe("SettingsSheet — Test Connection skip-on-mlx (SH-U7)", () => {
   });
 });
 
+// ── Phase 3 T-3.8 — Privacy mode picker (SH-U9..SH-U14) ─────────────────────
+
+describe("SettingsSheet — privacy picker default (SH-U9)", () => {
+  it("SH-U9: privacy picker renders with default 'local-first'", () => {
+    render(<SettingsSheet />);
+    const picker = screen.getByTestId(
+      "settings-privacy-mode-select",
+    ) as HTMLSelectElement;
+    expect(picker.value).toBe("local-first");
+    // a11y: accessible name surfaces via aria-label OR <label>
+    expect(picker.getAttribute("aria-label")).toBe("Privacy mode");
+  });
+});
+
+describe("SettingsSheet — local-first disables cloud STT options (SH-U10)", () => {
+  it("SH-U10: Deepgram + ElevenLabs options carry disabled + non-empty title", () => {
+    render(<SettingsSheet />);
+    const dgOption = screen.getByTestId(
+      "settings-provider-option-deepgram",
+    ) as HTMLOptionElement;
+    expect(dgOption.disabled).toBe(true);
+    expect(dgOption.getAttribute("title") ?? "").toMatch(/Switch to Cloud mode/);
+
+    const elOption = screen.getByTestId(
+      "settings-provider-option-elevenlabs",
+    ) as HTMLOptionElement;
+    expect(elOption.disabled).toBe(true);
+    expect(elOption.getAttribute("title") ?? "").toMatch(/cloud STT/i);
+
+    // MLX stays enabled
+    const mlxOption = screen.getByTestId(
+      "settings-provider-option-mlx",
+    ) as HTMLOptionElement;
+    expect(mlxOption.disabled).toBe(false);
+    expect(mlxOption.getAttribute("title")).toBeNull();
+  });
+});
+
+describe("SettingsSheet — switching to Cloud unlocks cloud STT (SH-U11)", () => {
+  it("SH-U11: pick Cloud → Deepgram option no longer disabled", () => {
+    render(<SettingsSheet />);
+    fireEvent.change(screen.getByTestId("settings-privacy-mode-select"), {
+      target: { value: "cloud" },
+    });
+    const dgOption = screen.getByTestId(
+      "settings-provider-option-deepgram",
+    ) as HTMLOptionElement;
+    expect(dgOption.disabled).toBe(false);
+    expect(dgOption.getAttribute("title")).toBeNull();
+  });
+});
+
+describe("SettingsSheet — auto-revert reflected on mode switch (SH-U12)", () => {
+  it("SH-U12: Cloud→deepgram, switch to Local-first → STT picker shows mlx", () => {
+    render(<SettingsSheet />);
+    // Swap to cloud + pick deepgram
+    fireEvent.change(screen.getByTestId("settings-privacy-mode-select"), {
+      target: { value: "cloud" },
+    });
+    fireEvent.change(screen.getByTestId("settings-provider-select"), {
+      target: { value: "deepgram" },
+    });
+    expect(useSettingsStore.getState().sttProvider).toBe("deepgram");
+
+    // Switch back to local-first → store auto-reverts; UI re-renders to mlx
+    fireEvent.change(screen.getByTestId("settings-privacy-mode-select"), {
+      target: { value: "local-first" },
+    });
+    const select = screen.getByTestId(
+      "settings-provider-select",
+    ) as HTMLSelectElement;
+    expect(select.value).toBe("mlx");
+    expect(useSettingsStore.getState().sttProvider).toBe("mlx");
+  });
+});
+
+describe("SettingsSheet — Mixed mode disables cloud STT (SH-U13)", () => {
+  it("SH-U13: Mixed → Deepgram + ElevenLabs disabled, MLX allowed", () => {
+    render(<SettingsSheet />);
+    fireEvent.change(screen.getByTestId("settings-privacy-mode-select"), {
+      target: { value: "mixed" },
+    });
+    expect(
+      (screen.getByTestId(
+        "settings-provider-option-deepgram",
+      ) as HTMLOptionElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByTestId(
+        "settings-provider-option-elevenlabs",
+      ) as HTMLOptionElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByTestId(
+        "settings-provider-option-mlx",
+      ) as HTMLOptionElement).disabled,
+    ).toBe(false);
+  });
+});
+
+describe("SettingsSheet — privacy summary line (SH-U14)", () => {
+  it("SH-U14: summary text changes per mode (gives the user immediate feedback)", () => {
+    render(<SettingsSheet />);
+    const summary = screen.getByTestId("settings-privacy-mode-summary");
+    expect(summary.textContent).toMatch(/local/i);
+
+    fireEvent.change(screen.getByTestId("settings-privacy-mode-select"), {
+      target: { value: "cloud" },
+    });
+    expect(summary.textContent).toMatch(/cloud/i);
+
+    fireEvent.change(screen.getByTestId("settings-privacy-mode-select"), {
+      target: { value: "mixed" },
+    });
+    expect(summary.textContent).toMatch(/cloud TTS/i);
+  });
+});
+
 describe("SettingsSheet — debounce in-flight click (SH-U8)", () => {
   it("SH-U8: second click while pending is a no-op (mock invoked once)", async () => {
     let resolveFn: (() => void) | null = null;

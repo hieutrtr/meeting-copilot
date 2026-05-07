@@ -29,6 +29,11 @@ use crate::provider::{FakeStt, SttError, SttProvider};
 pub mod backoff;
 pub use backoff::BackoffConfig;
 
+// Phase 3 T-3.8 — Privacy mode constraint matrix (backend gate). Pure Rust
+// (no transport dep), so it lives feature-ungated next to `backoff`.
+pub mod privacy;
+pub use privacy::{factory_with_privacy, is_provider_allowed, PrivacyMode};
+
 #[cfg(feature = "mlx-runtime")]
 pub mod mlx;
 
@@ -116,6 +121,16 @@ pub enum FactoryError {
     /// cause without unwrapping a chain.
     #[error("stt construction error: {0}")]
     Stt(#[from] SttError),
+
+    /// Phase 3 T-3.8 — `factory_with_privacy` rejected the (mode, kind) pair *before*
+    /// construction. The UI gates this in the picker (T-3.8 SettingsSheet), but any
+    /// caller that bypasses the UI (direct factory call, future Tauri command, hand-edited
+    /// settings) is blocked here. Privacy-by-construction at the seam.
+    #[error("provider {kind:?} disallowed under privacy mode {mode:?}")]
+    PrivacyModeViolation {
+        mode: privacy::PrivacyMode,
+        kind: ProviderKind,
+    },
 }
 
 /// Construct a boxed `dyn SttProvider` for `kind` using `cfg`. The single seam the
