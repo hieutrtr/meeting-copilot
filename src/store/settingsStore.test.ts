@@ -10,6 +10,13 @@
 //   SS-S25      — setItem-throws swallowed (AC-11)
 //   SS-S26..S27 — versioned storage key (AC-14)
 //   SS-S28      — null-storage scope guard (AC-5)
+//
+// Phase 3 T-3.6 — Settings UI store extensions:
+//   SS-S29      — defaults: sttProvider="mlx", apiKeys zero-filled
+//   SS-S30..S31 — setSttProvider round-trip + bad-id rejection
+//   SS-S32..S33 — setApiKey per-provider round-trip + isolation
+//   SS-S34      — v1 → v2 migration preserves v1 fields, fills v2 defaults
+//   SS-S35      — versioned storage key constants are v2 / v1 (legacy)
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -19,6 +26,8 @@ import { DEFAULT_SILENCE_MS } from "../detector/sliding-window";
 import {
   classifyWithSettingsGate,
   createSettingsStore,
+  LEGACY_SETTINGS_STORAGE_KEY,
+  SETTINGS_DEFAULTS,
   SETTINGS_STORAGE_KEY,
   type SettingsState,
   type StorageLike,
@@ -87,9 +96,10 @@ describe("SS-S1: defaults on empty storage", () => {
 });
 
 describe("SS-S2: defaults on corrupted JSON in storage", () => {
-  it("falls back silently when stored value is malformed JSON", () => {
+  it("falls back silently when stored value is malformed JSON (v2 + v1 both bad)", () => {
     const storage = createMockStorage({
       [SETTINGS_STORAGE_KEY]: "this is not json {",
+      [LEGACY_SETTINGS_STORAGE_KEY]: "also bad {",
     });
     const store = createSettingsStore({ storage });
     const s = store.getState();
@@ -117,6 +127,8 @@ describe("SS-S3: defaults on partial-shape JSON", () => {
     expect(s.silenceThresholdMs).toBe(800); // missing → default
     expect(s.costGuardThresholdUsdPerHour).toBe(0.5);
     expect(s.costGuardPaused).toBe(false);
+    expect(s.sttProvider).toBe("mlx"); // missing → default
+    expect(s.apiKeys).toEqual({ deepgram: "", elevenlabs: "" });
   });
 });
 
@@ -297,11 +309,15 @@ function snapshotFor(overrides: Partial<SettingsState>): SettingsState {
     silenceThresholdMs: 800,
     costGuardThresholdUsdPerHour: 0.5,
     costGuardPaused: false,
+    sttProvider: "mlx",
+    apiKeys: { deepgram: "", elevenlabs: "" },
     setHaikuConfidenceCutoff: () => undefined,
     setHaikuEnabled: () => undefined,
     setSilenceThresholdMs: () => undefined,
     setCostGuardThresholdUsdPerHour: () => undefined,
     setCostGuardPaused: () => undefined,
+    setSttProvider: () => undefined,
+    setApiKey: () => undefined,
     reset: () => undefined,
   };
   return { ...base, ...overrides };
@@ -419,9 +435,13 @@ describe("SS-S25: setItem throwing does not propagate out of setter", () => {
 
 // ── SS-S26..S27: versioned storage key (AC-14) ──────────────────────────────
 
-describe("SS-S26: SETTINGS_STORAGE_KEY constant", () => {
-  it("is exactly meeting-copilot:settings:v1", () => {
-    expect(SETTINGS_STORAGE_KEY).toBe("meeting-copilot:settings:v1");
+describe("SS-S26: SETTINGS_STORAGE_KEY constant (Phase 3 T-3.6 → v2)", () => {
+  it("is exactly meeting-copilot:settings:v2", () => {
+    expect(SETTINGS_STORAGE_KEY).toBe("meeting-copilot:settings:v2");
+  });
+
+  it("legacy v1 key constant is exposed for migration tests", () => {
+    expect(LEGACY_SETTINGS_STORAGE_KEY).toBe("meeting-copilot:settings:v1");
   });
 });
 
@@ -443,5 +463,165 @@ describe("SS-S28: store works when storage is null", () => {
     expect(store.getState().haikuConfidenceCutoff).toBe(0.7);
     expect(() => store.getState().setHaikuConfidenceCutoff(0.85)).not.toThrow();
     expect(store.getState().haikuConfidenceCutoff).toBe(0.85);
+  });
+});
+
+// ── Phase 3 T-3.6 — STT provider picker + per-provider API keys ─────────────
+
+describe("SS-S29: defaults — sttProvider=\"mlx\", apiKeys zero-filled", () => {
+  it("matches SETTINGS_DEFAULTS exactly for the new fields", () => {
+    const store = createSettingsStore({ storage: createMockStorage() });
+    const s = store.getState();
+    expect(s.sttProvider).toBe("mlx");
+    expect(s.sttProvider).toBe(SETTINGS_DEFAULTS.sttProvider);
+    expect(s.apiKeys).toEqual({ deepgram: "", elevenlabs: "" });
+    expect(s.apiKeys).toEqual(SETTINGS_DEFAULTS.apiKeys);
+  });
+});
+
+describe("SS-S30: setSttProvider round-trip", () => {
+  it("updates state and persists to storage", () => {
+    const storage = createMockStorage();
+    const store = createSettingsStore({ storage });
+    store.getState().setSttProvider("deepgram");
+    expect(store.getState().sttProvider).toBe("deepgram");
+    const written = JSON.parse(storage.inspect()[SETTINGS_STORAGE_KEY]!);
+    expect(written.sttProvider).toBe("deepgram");
+  });
+
+  it("survives recreate from same storage (persistence parity)", () => {
+    const storage = createMockStorage();
+    const a = createSettingsStore({ storage });
+    a.getState().setSttProvider("elevenlabs");
+    const b = createSettingsStore({ storage });
+    expect(b.getState().sttProvider).toBe("elevenlabs");
+  });
+});
+
+describe("SS-S31: setSttProvider rejects unknown ids", () => {
+  it("bogus provider id is a no-op (state unchanged, no throw)", () => {
+    const store = createSettingsStore({ storage: createMockStorage() });
+    const before = store.getState().sttProvider;
+    expect(() =>
+      // @ts-expect-error — intentionally bypassing the type guard.
+      store.getState().setSttProvider("not-a-provider"),
+    ).not.toThrow();
+    expect(store.getState().sttProvider).toBe(before);
+  });
+});
+
+describe("SS-S32: setApiKey round-trip per provider", () => {
+  it("deepgram key stored + persisted", () => {
+    const storage = createMockStorage();
+    const store = createSettingsStore({ storage });
+    store.getState().setApiKey("deepgram", "dg-secret-abc");
+    expect(store.getState().apiKeys.deepgram).toBe("dg-secret-abc");
+    const written = JSON.parse(storage.inspect()[SETTINGS_STORAGE_KEY]!);
+    expect(written.apiKeys.deepgram).toBe("dg-secret-abc");
+    expect(written.apiKeys.elevenlabs).toBe(""); // not touched
+  });
+
+  it("elevenlabs key stored + persisted; rejects non-string value", () => {
+    const storage = createMockStorage();
+    const store = createSettingsStore({ storage });
+    store.getState().setApiKey("elevenlabs", "el-secret-xyz");
+    expect(store.getState().apiKeys.elevenlabs).toBe("el-secret-xyz");
+    // @ts-expect-error — non-string defensive path.
+    store.getState().setApiKey("elevenlabs", 1234);
+    expect(store.getState().apiKeys.elevenlabs).toBe("el-secret-xyz");
+  });
+
+  it("clearing a key (empty string) is allowed — \"use env-var fallback\"", () => {
+    const store = createSettingsStore({ storage: createMockStorage() });
+    store.getState().setApiKey("deepgram", "abc");
+    store.getState().setApiKey("deepgram", "");
+    expect(store.getState().apiKeys.deepgram).toBe("");
+  });
+});
+
+describe("SS-S33: setApiKey is per-key isolated", () => {
+  it("setting deepgram does not change elevenlabs and vice-versa", () => {
+    const store = createSettingsStore({ storage: createMockStorage() });
+    store.getState().setApiKey("deepgram", "DG-KEY");
+    store.getState().setApiKey("elevenlabs", "EL-KEY");
+    const a = store.getState().apiKeys;
+    expect(a.deepgram).toBe("DG-KEY");
+    expect(a.elevenlabs).toBe("EL-KEY");
+
+    store.getState().setApiKey("deepgram", "DG-KEY-2");
+    const b = store.getState().apiKeys;
+    expect(b.deepgram).toBe("DG-KEY-2");
+    expect(b.elevenlabs).toBe("EL-KEY"); // unchanged
+  });
+
+  it("rejects unknown provider id", () => {
+    const store = createSettingsStore({ storage: createMockStorage() });
+    expect(() =>
+      // @ts-expect-error — bogus key.
+      store.getState().setApiKey("openai", "should-not-set"),
+    ).not.toThrow();
+    expect(store.getState().apiKeys).toEqual({ deepgram: "", elevenlabs: "" });
+  });
+});
+
+describe("SS-S34: v1 → v2 migration", () => {
+  it("loads v1 payload when v2 is absent and lifts into v2 shape", () => {
+    const v1Payload = {
+      haikuConfidenceCutoff: 0.92,
+      haikuEnabled: false,
+      silenceThresholdMs: 1500,
+      costGuardThresholdUsdPerHour: 1.25,
+      costGuardPaused: true,
+    };
+    const storage = createMockStorage({
+      [LEGACY_SETTINGS_STORAGE_KEY]: JSON.stringify(v1Payload),
+    });
+    const store = createSettingsStore({ storage });
+    const s = store.getState();
+    // v1 fields preserved byte-identically
+    expect(s.haikuConfidenceCutoff).toBe(0.92);
+    expect(s.haikuEnabled).toBe(false);
+    expect(s.silenceThresholdMs).toBe(1500);
+    expect(s.costGuardThresholdUsdPerHour).toBe(1.25);
+    expect(s.costGuardPaused).toBe(true);
+    // v2 additions zero-fill from defaults
+    expect(s.sttProvider).toBe("mlx");
+    expect(s.apiKeys).toEqual({ deepgram: "", elevenlabs: "" });
+    // After migration, v2 key has been written
+    const inspected = storage.inspect();
+    expect(inspected[SETTINGS_STORAGE_KEY]).toBeDefined();
+    const persisted = JSON.parse(inspected[SETTINGS_STORAGE_KEY]!);
+    expect(persisted.haikuConfidenceCutoff).toBe(0.92);
+    expect(persisted.sttProvider).toBe("mlx");
+    // v1 left in place (non-destructive — downgrade rollback safe)
+    expect(inspected[LEGACY_SETTINGS_STORAGE_KEY]).toBeDefined();
+  });
+
+  it("v2 takes precedence when both keys are present", () => {
+    const storage = createMockStorage({
+      [LEGACY_SETTINGS_STORAGE_KEY]: JSON.stringify({
+        haikuConfidenceCutoff: 0.5,
+      }),
+      [SETTINGS_STORAGE_KEY]: JSON.stringify({
+        haikuConfidenceCutoff: 0.99,
+        sttProvider: "elevenlabs",
+      }),
+    });
+    const store = createSettingsStore({ storage });
+    expect(store.getState().haikuConfidenceCutoff).toBe(0.99);
+    expect(store.getState().sttProvider).toBe("elevenlabs");
+  });
+});
+
+describe("SS-S35: SETTINGS_DEFAULTS shape includes v2 fields", () => {
+  it("has both v1 and v2 fields with the documented defaults", () => {
+    expect(SETTINGS_DEFAULTS.sttProvider).toBe("mlx");
+    expect(SETTINGS_DEFAULTS.apiKeys).toEqual({
+      deepgram: "",
+      elevenlabs: "",
+    });
+    // v1 fields stay at the documented constants
+    expect(SETTINGS_DEFAULTS.haikuConfidenceCutoff).toBe(0.7);
+    expect(SETTINGS_DEFAULTS.haikuEnabled).toBe(true);
   });
 });

@@ -146,3 +146,92 @@
 .answer-flash {
   animation: answer-flash-fade 1.5s ease-out;
 }
+
+/* T-3.6 — Settings sheet (provider picker + API key + Test Connection). */
+.settings-sheet__details {
+  margin-top: 1.25rem;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  background: #fafafa;
+}
+
+.settings-sheet__details > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.settings-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 0.75rem 0.25rem 0.5rem;
+}
+
+.settings-sheet__heading {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.settings-sheet__row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.settings-sheet__label {
+  flex: 0 0 8rem;
+  color: #4a4a4a;
+}
+
+.settings-sheet__select,
+.settings-sheet__input {
+  padding: 0.35rem 0.55rem;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  font: inherit;
+  flex: 1;
+  min-width: 12rem;
+}
+
+.settings-sheet__input:disabled {
+  background: #f0f0f0;
+  color: #9a9a9a;
+}
+
+.settings-sheet__show-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: #6a6a6a;
+}
+
+.settings-sheet__test-button {
+  padding: 0.4rem 0.8rem;
+  border: 0;
+  border-radius: 4px;
+  background: #2962ff;
+  color: white;
+  cursor: pointer;
+  font: inherit;
+}
+
+.settings-sheet__test-button:disabled {
+  background: #b0bce8;
+  cursor: not-allowed;
+}
+
+.settings-sheet__pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+}
+
+.settings-sheet__pill--idle { background: transparent; color: transparent; }
+.settings-sheet__pill--pending { background: #fff5d4; color: #826200; }
+.settings-sheet__pill--success { background: #d6f5dc; color: #146c28; }
+.settings-sheet__pill--fail { background: #ffd6d6; color: #a3252e; }

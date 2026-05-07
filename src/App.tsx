@@ -6,6 +6,7 @@ import { AnswerPanel } from "./components/AnswerPanel";
 import { ContextLoader } from "./components/ContextLoader";
 import { MeetingControls } from "./components/MeetingControls";
 import { PastMeetings } from "./components/PastMeetings";
+import { SettingsSheet } from "./components/SettingsSheet";
 import { TranscriptView } from "./components/TranscriptView";
 import { useTranscriptStream } from "./hooks/useTranscriptStream";
 import { useAskClaude } from "./hooks/useAskClaude";
@@ -79,6 +80,10 @@ export default function App() {
         cacheReadRatio={cacheReadRatio}
       />
       <PastMeetings />
+      <details className="settings-sheet__details">
+        <summary>Settings</summary>
+        <SettingsSheet />
+      </details>
     </main>
   );
 }
