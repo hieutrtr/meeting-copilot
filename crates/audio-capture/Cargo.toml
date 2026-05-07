@@ -13,3 +13,13 @@ path = "src/lib.rs"
 cpal = "0.15"
 hound = "3.5"
 thiserror = "1"
+
+# T-W.2 / T-W.4 — macOS-only CoreAudio FFI for BlackHole detection probes (a)+(b)+(c)
+# and Multi-Output Device creation (`AudioHardwareCreateAggregateDevice`). The trait
+# surface in `src/blackhole.rs` is OS-agnostic so unit tests with `MockCoreAudio` compile
+# on any host; only `RealCoreAudioProbe` + T-W.4 `multi_output.rs` touch these crates and
+# are gated behind `cfg(target_os = "macos")`.
+[target.'cfg(target_os = "macos")'.dependencies]
+coreaudio-sys = { version = "0.2", features = ["audio_toolbox"] }
+core-foundation = "0.9"
+core-foundation-sys = "0.8"

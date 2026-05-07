@@ -4,12 +4,17 @@
 //
 // Public surface re-exports below; module docs live in the per-file rustdoc.
 
+pub mod blackhole;
 pub mod chunker;
 pub mod mic;
 pub mod ring;
 pub mod source;
 pub mod wav;
 
+pub use blackhole::{
+    detect_blackhole, find_blackhole, find_multi_output_with_blackhole, AggregateInfo,
+    BlackHoleStatus, CoreAudioProbe, DeviceInfo, RealCoreAudioProbe,
+};
 pub use chunker::{Chunker, ChunkerConfig};
 pub use mic::CpalMicSource;
 pub use ring::RingBuffer;
