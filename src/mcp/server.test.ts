@@ -83,16 +83,11 @@ describe("MCP server skeleton (T-4.2)", () => {
     }
   });
 
-  // T-4.3 lit `bridge_meeting_install`; T-4.4 lit `bridge_meeting_start`
-  // (the start integration test sits below the describe.each block — it uses
-  // the in-memory client + a buildServer handler override so the test never
-  // shells out to `open(1)` on the host machine).
+  // T-4.3 lit `bridge_meeting_install`; T-4.4 lit `bridge_meeting_start`;
+  // T-4.5 lit `bridge_meeting_status` (positive integration test sits below
+  // the describe.each block — it uses the in-memory client + a buildServer
+  // handler override so the test never dials a real Unix socket).
   describe.each([
-    {
-      name: "bridge_meeting_status",
-      futureTask: "T-4.5",
-      args: {} as Record<string, unknown>,
-    },
     {
       name: "bridge_meeting_stop",
       futureTask: "T-4.6",
@@ -207,6 +202,58 @@ describe("MCP server skeleton (T-4.2)", () => {
     }
   });
 
+  it("bridge_meeting_status (T-4.5) end-to-end via injected handler — happy path", async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const { handleStatus } = await import("./handlers/status");
+    const fixtureReply = {
+      meetings: [
+        {
+          id: "m_int",
+          pid: 9999,
+          startedAt: 1_700_000_000_000,
+          sttProvider: "mlx",
+          transcriptChunks: 3,
+          questionCount: 0,
+          answerCount: 0,
+          uptimeSec: 7,
+        },
+      ],
+    };
+    let dialCallCount = 0;
+    const server = buildServer({
+      handlers: {
+        bridge_meeting_status: (args) =>
+          handleStatus(args, {
+            resolveSocketPathOpts: { env: {}, homedir: () => "/tmp/h" },
+            dialSocket: async () => {
+              dialCallCount += 1;
+              return fixtureReply;
+            },
+          }),
+      },
+    });
+    await server.connect(serverTransport);
+    const isolatedClient = new Client(
+      { name: "t45-test-client", version: "0.0.0" },
+      { capabilities: {} },
+    );
+    await isolatedClient.connect(clientTransport);
+    try {
+      const result = (await isolatedClient.callTool({
+        name: "bridge_meeting_status",
+        arguments: {},
+      })) as CallToolResult;
+      expect(result.isError).toBeFalsy();
+      expect(dialCallCount).toBe(1);
+      const text = result.content[0]?.text ?? "";
+      expect(text).toContain('"m_int"');
+      expect(text).toContain('"sttProvider": "mlx"');
+    } finally {
+      await isolatedClient.close();
+      await server.close();
+    }
+  });
+
   it("bridge_meeting_install (T-4.3) probes a missing path and returns installed:false", async () => {
     // Pass an explicit non-existent path so the test never reads the real
     // `/Applications/Meeting Copilot.app` on a developer machine.
@@ -237,11 +284,11 @@ describe("MCP server skeleton (T-4.2)", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0]?.type).toBe("text");
     // Server stays alive for the next call. Use a still-placeholder tool
-    // (status, T-4.5) so this test stays a placeholder-shape probe rather
+    // (stop, T-4.6) so this test stays a placeholder-shape probe rather
     // than depending on whichever handlers are real-implemented.
     const second = (await client.callTool({
-      name: "bridge_meeting_status",
-      arguments: {},
+      name: "bridge_meeting_stop",
+      arguments: { meetingId: "m_42" },
     })) as CallToolResult;
     expect(second.isError).toBe(true);
   });

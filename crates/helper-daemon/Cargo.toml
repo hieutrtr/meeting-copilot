@@ -19,3 +19,12 @@ thiserror = "1"
 # build env doesn't need a system libsqlite-dev (macOS dev hosts already have cc
 # from Xcode CLT — Phase 0 T-0.8 prerequisite). Plugin-sql is deferred to Phase 1.x.
 rusqlite = { version = "0.31", features = ["bundled"] }
+# T-4.5 — async UDS RPC server (`crate::mcp_rpc`) per ARCH §9.3. The Tauri app's
+# binary entrypoint (Phase 4.x) constructs a multi-threaded runtime to host the
+# RPC server alongside the Chunker→STT pipeline; the lib here exposes the
+# `RpcServer::serve` future so callers own the runtime shape.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "sync", "time"] }
+
+[dev-dependencies]
+tempfile = "3"
+
