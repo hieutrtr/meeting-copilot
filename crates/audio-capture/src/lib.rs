@@ -10,6 +10,7 @@ pub mod mic;
 pub mod multi_output;
 pub mod ring;
 pub mod source;
+pub mod verify;
 pub mod wav;
 
 pub use blackhole::{
@@ -27,4 +28,8 @@ pub use multi_output::{
 };
 pub use ring::RingBuffer;
 pub use source::{AudioError, AudioSource, PcmChunk};
+pub use verify::{
+    verify_capture, AudioInputProbe, CaptureWindow, RealAudioInputProbe, VerifyError, VerifyReport,
+    DEFAULT_VERIFY_DURATION_MS, VERIFY_PEAK_THRESHOLD,
+};
 pub use wav::WavFileSource;
