@@ -1,6 +1,6 @@
 [package]
 name = "stt-mlx"
-version = "0.0.0"
+version = "1.0.0"
 description = "Meeting Copilot STT adapter — Phase 1 T-1.5 (MLX whisper subprocess + FakeStt behind SttProvider trait)."
 edition = "2021"
 rust-version = "1.77"
