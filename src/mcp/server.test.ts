@@ -83,20 +83,11 @@ describe("MCP server skeleton (T-4.2)", () => {
     }
   });
 
-  // T-4.3 lit `bridge_meeting_install` — no longer in the placeholder list.
-  // Remaining 4 placeholders below; the install integration test follows the
-  // describe.each block.
+  // T-4.3 lit `bridge_meeting_install`; T-4.4 lit `bridge_meeting_start`
+  // (the start integration test sits below the describe.each block — it uses
+  // the in-memory client + a buildServer handler override so the test never
+  // shells out to `open(1)` on the host machine).
   describe.each([
-    {
-      name: "bridge_meeting_start",
-      futureTask: "T-4.4",
-      args: {
-        contextPaths: [],
-        sttProvider: "mlx",
-        model: "claude-sonnet-4-6",
-        privacyMode: "local-first",
-      } as Record<string, unknown>,
-    },
     {
       name: "bridge_meeting_status",
       futureTask: "T-4.5",
@@ -124,6 +115,96 @@ describe("MCP server skeleton (T-4.2)", () => {
       expect(result.content[0]?.text).toMatch(/^NotImplemented: /);
       expect(result.content[0]?.text).toContain(futureTask);
     });
+  });
+
+  it("bridge_meeting_start (T-4.4) end-to-end via injected handler — happy path", async () => {
+    // Use an isolated buildServer with a handler override that injects test
+    // deps (mock spawn + synthetic handshake). Avoids shelling out to
+    // `open(1)` on the host machine.
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const { handleStart, syntheticHandshake } = await import("./handlers/start");
+    let spawnCallCount = 0;
+    const server = buildServer({
+      handlers: {
+        bridge_meeting_start: (args) =>
+          handleStart(args, {
+            spawn: (cmd, sArgs, _opts) => {
+              spawnCallCount += 1;
+              expect(cmd).toBe("open");
+              expect((sArgs as readonly string[])[0]).toMatch(
+                /^meeting-copilot:\/\/start\?/,
+              );
+              return { unref: () => undefined };
+            },
+            pollHandshake: async () => syntheticHandshake({ meetingId: "m-int" }),
+          }),
+      },
+    });
+    await server.connect(serverTransport);
+    const isolatedClient = new Client(
+      { name: "t44-test-client", version: "0.0.0" },
+      { capabilities: {} },
+    );
+    await isolatedClient.connect(clientTransport);
+    try {
+      const result = (await isolatedClient.callTool({
+        name: "bridge_meeting_start",
+        arguments: {
+          contextPaths: ["/tmp/PRD.md"],
+          sttProvider: "mlx",
+          model: "claude-sonnet-4-6",
+          privacyMode: "local-first",
+        },
+      })) as CallToolResult;
+      expect(result.isError).toBeFalsy();
+      expect(spawnCallCount).toBe(1);
+      const text = result.content[0]?.text ?? "";
+      expect(text).toContain('"meetingId": "m-int"');
+    } finally {
+      await isolatedClient.close();
+      await server.close();
+    }
+  });
+
+  it("bridge_meeting_start (T-4.4) rejects PrivacyModeViolation BEFORE spawn", async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const { handleStart, syntheticHandshake } = await import("./handlers/start");
+    let spawnCallCount = 0;
+    const server = buildServer({
+      handlers: {
+        bridge_meeting_start: (args) =>
+          handleStart(args, {
+            spawn: () => {
+              spawnCallCount += 1;
+              return { unref: () => undefined };
+            },
+            pollHandshake: async () => syntheticHandshake(),
+          }),
+      },
+    });
+    await server.connect(serverTransport);
+    const isolatedClient = new Client(
+      { name: "t44-privacy-client", version: "0.0.0" },
+      { capabilities: {} },
+    );
+    await isolatedClient.connect(clientTransport);
+    try {
+      const result = (await isolatedClient.callTool({
+        name: "bridge_meeting_start",
+        arguments: {
+          contextPaths: [],
+          sttProvider: "deepgram", // cloud STT under local-first → must reject
+          model: "claude-sonnet-4-6",
+          privacyMode: "local-first",
+        },
+      })) as CallToolResult;
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toMatch(/^PrivacyModeViolation:/);
+      expect(spawnCallCount).toBe(0);
+    } finally {
+      await isolatedClient.close();
+      await server.close();
+    }
   });
 
   it("bridge_meeting_install (T-4.3) probes a missing path and returns installed:false", async () => {

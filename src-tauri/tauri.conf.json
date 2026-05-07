@@ -32,6 +32,17 @@
     ],
     "category": "Productivity",
     "shortDescription": "Meeting Copilot — Phase 0 scaffold",
-    "longDescription": "Meeting Copilot Phase 0 Tauri scaffold. See docs/IMPLEMENTATION-PLAN.md."
+    "longDescription": "Meeting Copilot Phase 0 Tauri scaffold. See docs/IMPLEMENTATION-PLAN.md.",
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "mobile": [],
+      "desktop": {
+        "schemes": ["meeting-copilot"]
+      }
+    }
   }
 }
