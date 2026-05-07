@@ -84,15 +84,11 @@ describe("MCP server skeleton (T-4.2)", () => {
   });
 
   // T-4.3 lit `bridge_meeting_install`; T-4.4 lit `bridge_meeting_start`;
-  // T-4.5 lit `bridge_meeting_status` (positive integration test sits below
-  // the describe.each block — it uses the in-memory client + a buildServer
-  // handler override so the test never dials a real Unix socket).
+  // T-4.5 lit `bridge_meeting_status`; T-4.6 lit `bridge_meeting_stop`
+  // (positive integration tests sit below the describe.each block — they use
+  // the in-memory client + a buildServer handler override so the tests never
+  // dial a real Unix socket).
   describe.each([
-    {
-      name: "bridge_meeting_stop",
-      futureTask: "T-4.6",
-      args: { meetingId: "m_42" } as Record<string, unknown>,
-    },
     {
       name: "bridge_meeting_export",
       futureTask: "T-4.7",
@@ -283,14 +279,93 @@ describe("MCP server skeleton (T-4.2)", () => {
     })) as CallToolResult;
     expect(result.isError).toBe(true);
     expect(result.content[0]?.type).toBe("text");
-    // Server stays alive for the next call. Use a still-placeholder tool
-    // (stop, T-4.6) so this test stays a placeholder-shape probe rather
+    // Server stays alive for the next call. Use the still-placeholder tool
+    // (export, T-4.7) so this test stays a placeholder-shape probe rather
     // than depending on whichever handlers are real-implemented.
     const second = (await client.callTool({
-      name: "bridge_meeting_stop",
-      arguments: { meetingId: "m_42" },
+      name: "bridge_meeting_export",
+      arguments: { meetingId: "m_42", format: "markdown" },
     })) as CallToolResult;
     expect(second.isError).toBe(true);
+  });
+
+  it("bridge_meeting_stop (T-4.6) end-to-end via injected handler — happy path", async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const { handleStop } = await import("./handlers/stop");
+    const fixtureReply = {
+      durationSec: 18,
+      questionCount: 1,
+    };
+    let dialCallCount = 0;
+    const server = buildServer({
+      handlers: {
+        bridge_meeting_stop: (args) =>
+          handleStop(args, {
+            resolveSocketPathOpts: { env: {}, homedir: () => "/tmp/h" },
+            dialSocket: async (_path, request) => {
+              dialCallCount += 1;
+              expect(request).toMatchObject({ method: "stop", meetingId: "m_int" });
+              return fixtureReply;
+            },
+          }),
+      },
+    });
+    await server.connect(serverTransport);
+    const isolatedClient = new Client(
+      { name: "t46-test-client", version: "0.0.0" },
+      { capabilities: {} },
+    );
+    await isolatedClient.connect(clientTransport);
+    try {
+      const result = (await isolatedClient.callTool({
+        name: "bridge_meeting_stop",
+        arguments: { meetingId: "m_int" },
+      })) as CallToolResult;
+      expect(result.isError).toBeFalsy();
+      expect(dialCallCount).toBe(1);
+      const text = result.content[0]?.text ?? "";
+      expect(text).toContain('"durationSec": 18');
+      expect(text).toContain('"questionCount": 1');
+    } finally {
+      await isolatedClient.close();
+      await server.close();
+    }
+  });
+
+  it("bridge_meeting_stop (T-4.6) maps DaemonMeetingNotFound to MeetingNotFound", async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const { handleStop } = await import("./handlers/stop");
+    const server = buildServer({
+      handlers: {
+        bridge_meeting_stop: (args) =>
+          handleStop(args, {
+            resolveSocketPathOpts: { env: {}, homedir: () => "/tmp/h" },
+            dialSocket: async () => ({
+              error: {
+                code: "DaemonMeetingNotFound",
+                message: 'no active meeting with id "m_ghost"',
+              },
+            }),
+          }),
+      },
+    });
+    await server.connect(serverTransport);
+    const isolatedClient = new Client(
+      { name: "t46-not-found-client", version: "0.0.0" },
+      { capabilities: {} },
+    );
+    await isolatedClient.connect(clientTransport);
+    try {
+      const result = (await isolatedClient.callTool({
+        name: "bridge_meeting_stop",
+        arguments: { meetingId: "m_ghost" },
+      })) as CallToolResult;
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toMatch(/^MeetingNotFound:/);
+    } finally {
+      await isolatedClient.close();
+      await server.close();
+    }
   });
 });
 

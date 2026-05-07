@@ -7,6 +7,8 @@
 // schema (Meeting / TranscriptChunk / Question / Answer / ContextSource + junction).
 // T-4.5 adds the out-of-process RPC surface (`crate::mcp_rpc`) — line-delimited JSON over UDS;
 // the Tauri app's binary entrypoint in Phase 4.x wires `serve` into a tokio runtime.
+// T-4.6 fills in the `stop` method on the same RPC surface (idempotent flush) + adds
+// `Repo::mark_meeting_ended` for the entrypoint's persist-on-shutdown side-effect.
 
 pub mod bridge;
 pub mod context;
@@ -20,7 +22,7 @@ pub use bridge::{
 pub use context::{read_context_file, ContextError, ContextFile, ALLOWED_EXTENSIONS};
 pub use mcp_rpc::{
     dispatch, recover_stale_socket, serve, serve_once, ErrorBody, ErrorResponse,
-    MeetingStatusEntry, RpcError, RpcState, StatusResponse,
+    MeetingStatusEntry, RpcError, RpcState, StatusResponse, StopRecord, StopResponse,
 };
 pub use repo::{
     AnswerRow, ContextSourceRow, MeetingRow, MeetingSnapshot, QuestionRow, Repo, RepoError,

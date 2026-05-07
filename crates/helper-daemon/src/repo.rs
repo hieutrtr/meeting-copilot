@@ -521,6 +521,30 @@ impl Repo {
         Ok(rows)
     }
 
+    /// T-4.6 — mark a meeting as ended at `ended_at` ms-since-epoch and update
+    /// its `status` field. Returns the number of rows affected (0 = unknown id,
+    /// 1 = updated). Idempotent: re-running with the same args is a no-op
+    /// (overwrites with same values).
+    ///
+    /// The Phase 4.x helper-daemon binary entrypoint calls this from the
+    /// `stop` RPC handler immediately after the STT decoder flush + before
+    /// `RpcState::stopped` cache insertion. Keeping it on `Repo` (rather than
+    /// in `mcp_rpc.rs`) means the stop side-effect respects the same single-
+    /// connection mutex as the rest of the schema mutations.
+    pub fn mark_meeting_ended(
+        &self,
+        meeting_id: &str,
+        ended_at: i64,
+        status: &str,
+    ) -> Result<usize, RepoError> {
+        let conn = self.lock();
+        let n = conn.execute(
+            "UPDATE meetings SET ended_at = ?1, status = ?2 WHERE id = ?3",
+            params![ended_at, status, meeting_id],
+        )?;
+        Ok(n)
+    }
+
     /// T-1.13 — single-transaction Stop→persist helper. Inserts everything in
     /// the canonical order (meeting → context + link → chunks → questions →
     /// answer). On any failure the txn rolls back so we never leave a
@@ -1079,6 +1103,76 @@ mod tests {
             repo.list_contexts_for_meeting("m-bare").expect("ctx"),
             vec![]
         );
+    }
+
+    // T-4.6 R1: mark_meeting_ended updates ended_at + status, returns 1 row affected.
+    #[test]
+    fn mark_meeting_ended_updates_row() {
+        let repo = Repo::open_in_memory().expect("open ok");
+        // Insert a still-active meeting (ended_at None, status active).
+        let m = MeetingRow {
+            id: "m-active".into(),
+            title: "Live sync".into(),
+            started_at: 1_700_000_000_000,
+            ended_at: None,
+            stt_provider: Some("mlx-whisper".into()),
+            model: Some("medium".into()),
+            privacy_mode: Some("local-first".into()),
+            status: "active".into(),
+        };
+        repo.insert_meeting(&m).expect("insert");
+        let n = repo
+            .mark_meeting_ended("m-active", 1_700_000_900_000, "ended")
+            .expect("update");
+        assert_eq!(n, 1);
+        let got = repo.get_meeting("m-active").expect("get").expect("row");
+        assert_eq!(got.ended_at, Some(1_700_000_900_000));
+        assert_eq!(got.status, "ended");
+        // Other fields preserved.
+        assert_eq!(got.title, "Live sync");
+        assert_eq!(got.started_at, 1_700_000_000_000);
+        assert_eq!(got.privacy_mode, Some("local-first".into()));
+    }
+
+    // T-4.6 R2: mark_meeting_ended on unknown id → 0 rows, no error, no panic.
+    #[test]
+    fn mark_meeting_ended_unknown_id_returns_zero_rows() {
+        let repo = Repo::open_in_memory().expect("open ok");
+        let n = repo
+            .mark_meeting_ended("ghost", 1_700_000_900_000, "ended")
+            .expect("update should not error on no-op");
+        assert_eq!(n, 0);
+        // Repo state unchanged.
+        assert_eq!(repo.list_meetings().expect("list"), vec![]);
+    }
+
+    // T-4.6 R3: re-running mark_meeting_ended with same args is idempotent
+    // (overwrites with the same values, returns 1 each time).
+    #[test]
+    fn mark_meeting_ended_is_idempotent_on_replay() {
+        let repo = Repo::open_in_memory().expect("open ok");
+        let m = MeetingRow {
+            id: "m-r3".into(),
+            title: "T-4.6 idempotent".into(),
+            started_at: 1_700_000_000_000,
+            ended_at: None,
+            stt_provider: None,
+            model: None,
+            privacy_mode: None,
+            status: "active".into(),
+        };
+        repo.insert_meeting(&m).expect("insert");
+        let n1 = repo
+            .mark_meeting_ended("m-r3", 1_700_000_500_000, "ended")
+            .expect("update 1");
+        let n2 = repo
+            .mark_meeting_ended("m-r3", 1_700_000_500_000, "ended")
+            .expect("update 2 (replay)");
+        assert_eq!(n1, 1);
+        assert_eq!(n2, 1);
+        let got = repo.get_meeting("m-r3").expect("get").expect("row");
+        assert_eq!(got.ended_at, Some(1_700_000_500_000));
+        assert_eq!(got.status, "ended");
     }
 
     // T-1.13 E4: re-saving the same meeting.id rejects (PK violation, no silent overwrite).

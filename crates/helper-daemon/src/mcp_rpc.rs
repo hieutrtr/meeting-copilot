@@ -28,12 +28,15 @@
 //   other daemon first. The unit test `recover_stale_socket_unlinks_dead`
 //   exercises the dead-socket branch directly.
 //
-// Surface ownership: T-4.5 ships `status` + dispatch shape. T-4.6 will add
-// `stop` (mutates Repo). T-4.9 will add `subscribe` (long-lived). The
-// `RpcState` struct gathers the read-side state needed to answer queries —
-// the Tauri-app entrypoint constructs a `Repo` + a meetings tracker and
+// Surface ownership: T-4.5 ships `status` + dispatch shape. T-4.6 ADDS
+// `stop` (mutates `RpcState`; the Phase 4.x entrypoint wires the Repo
+// `mark_meeting_ended` callback and STT-buffer flush around it). T-4.9 will
+// add `subscribe` (long-lived). The `RpcState` struct gathers the read-side
+// state needed to answer queries plus the stop-record cache for idempotency
+// — the Tauri-app entrypoint constructs a `Repo` + a meetings tracker and
 // passes them in via `Arc`s.
 
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -70,6 +73,39 @@ pub struct StatusResponse {
     pub meetings: Vec<MeetingStatusEntry>,
 }
 
+/// Response envelope for `stop`. Mirror of TS `StopOutputSchema`. The optional
+/// `exported_path` is `None` unless the entrypoint passes through an auto-
+/// export side-effect at stop time (Phase 4.x — the lib leaves this `None`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StopResponse {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub exported_path: Option<String>,
+    pub duration_sec: f64,
+    pub question_count: u32,
+}
+
+/// Cached stop record kept inside `RpcState.stopped` for idempotency. Re-stops
+/// of the same meeting return the same record without mutating state again.
+/// `Clone` so the dispatch can hand back a fresh copy without holding the
+/// state mutex across serialisation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StopRecord {
+    pub exported_path: Option<String>,
+    pub duration_sec: f64,
+    pub question_count: u32,
+}
+
+impl From<&StopRecord> for StopResponse {
+    fn from(rec: &StopRecord) -> Self {
+        StopResponse {
+            exported_path: rec.exported_path.clone(),
+            duration_sec: rec.duration_sec,
+            question_count: rec.question_count,
+        }
+    }
+}
+
 /// Error envelope for any RPC method. Wire shape `{"error":{"code":…,"message":…}}`.
 /// Codes are the same closed set the MCP layer uses (`tools.ts:ERROR_CODES`)
 /// where applicable; daemon-only errors (e.g. unknown method) get a daemon
@@ -87,11 +123,16 @@ pub struct ErrorResponse {
     pub error: ErrorBody,
 }
 
-/// Read-side state for the RPC server. Kept inside an `Arc<Mutex<…>>` so
-/// future T-4.6 stop method can mutate without re-arch-ing the surface.
+/// Read-side + stop-record state for the RPC server. Kept inside an
+/// `Arc<Mutex<…>>` so the `stop` mutation is atomic against concurrent
+/// `status` reads. T-4.6 added `stopped` for idempotent stop replay.
 #[derive(Debug, Default, Clone)]
 pub struct RpcState {
     pub meetings: Vec<MeetingStatusEntry>,
+    /// Map from `meetingId` → cached `StopRecord`. Populated on the first
+    /// stop of a given meeting; subsequent stops return the cached record
+    /// without mutating `meetings` (which already had the entry removed).
+    pub stopped: HashMap<String, StopRecord>,
 }
 
 #[derive(Debug, Error)]
@@ -192,17 +233,16 @@ pub async fn dispatch(line: &str, state: &Arc<Mutex<RpcState>>) -> String {
 
     match request.method.as_str() {
         "status" => handle_status(state, request.meeting_id.as_deref()).await,
-        "stop" => {
-            // T-4.6 will own this; emit a typed unknown-method-shaped error
-            // until then so the dispatch surface is stable.
-            serde_json::to_string(&ErrorResponse {
+        "stop" => match request.meeting_id.as_deref() {
+            Some(id) => handle_stop(state, id).await,
+            None => serde_json::to_string(&ErrorResponse {
                 error: ErrorBody {
-                    code: "DaemonNotImplemented".to_string(),
-                    message: "stop method lands in T-4.6".to_string(),
+                    code: "DaemonMalformedRequest".to_string(),
+                    message: "stop requires meetingId".to_string(),
                 },
             })
-            .expect("error envelope serializes")
-        }
+            .expect("error envelope serializes"),
+        },
         other => serde_json::to_string(&ErrorResponse {
             error: ErrorBody {
                 code: "DaemonUnknownMethod".to_string(),
@@ -226,6 +266,59 @@ async fn handle_status(state: &Arc<Mutex<RpcState>>, filter: Option<&str>) -> St
     };
     serde_json::to_string(&StatusResponse { meetings })
         .expect("status response serializes")
+}
+
+/// Dispatch the `stop` method.
+///
+/// Three branches, in priority order:
+///   1. **Idempotent replay** — meetingId is in `stopped`: return the cached
+///      `StopRecord` verbatim. No mutation. The Phase 4.x entrypoint that
+///      wires Repo + STT must NOT re-flush on a replay (it has already done
+///      so on the first stop).
+///   2. **First stop** — meetingId is in `meetings`: remove the entry,
+///      construct a `StopRecord` from the entry's recorded `uptime_sec` +
+///      `question_count`, cache it in `stopped`, return it. The entrypoint's
+///      side-effect callback (mark_meeting_ended on the Repo + STT flush) is
+///      driven by the entrypoint at the call site that invokes `dispatch`,
+///      not here — keeps the lib pure.
+///   3. **Unknown id** — return `DaemonMeetingNotFound` typed error envelope.
+///      The TS handler maps this to `MeetingNotFound`.
+///
+/// Note on `exported_path`: at the lib level we always return `None`. The
+/// Phase 4.x entrypoint that owns settings + auto-export is responsible for
+/// populating the field by reaching into `state.stopped` after the first stop
+/// and replacing the record's `exported_path` with the resolved file path.
+/// Idempotent replay then reflects that mutation.
+async fn handle_stop(state: &Arc<Mutex<RpcState>>, meeting_id: &str) -> String {
+    let mut state = state.lock().await;
+
+    // Branch 1: idempotent replay.
+    if let Some(rec) = state.stopped.get(meeting_id) {
+        return serde_json::to_string(&StopResponse::from(rec))
+            .expect("stop response serializes");
+    }
+
+    // Branch 2: first stop on a known active meeting.
+    if let Some(idx) = state.meetings.iter().position(|m| m.id == meeting_id) {
+        let entry = state.meetings.remove(idx);
+        let rec = StopRecord {
+            exported_path: None,
+            duration_sec: entry.uptime_sec as f64,
+            question_count: entry.question_count,
+        };
+        let response = StopResponse::from(&rec);
+        state.stopped.insert(meeting_id.to_string(), rec);
+        return serde_json::to_string(&response).expect("stop response serializes");
+    }
+
+    // Branch 3: unknown id.
+    serde_json::to_string(&ErrorResponse {
+        error: ErrorBody {
+            code: "DaemonMeetingNotFound".to_string(),
+            message: format!("no active meeting with id \"{meeting_id}\""),
+        },
+    })
+    .expect("error envelope serializes")
 }
 
 /// Stale-socket recovery (R-4 mitigation).
@@ -293,6 +386,7 @@ mod tests {
                     uptime_sec: 5,
                 },
             ],
+            ..Default::default()
         }
     }
 
@@ -333,12 +427,79 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatch_stop_method_returns_t46_placeholder() {
+    async fn dispatch_stop_returns_recorded_shape_for_known_meeting() {
         let state = Arc::new(Mutex::new(sample_state()));
         let body = dispatch(r#"{"method":"stop","meetingId":"m_1"}"#, &state).await;
+        let parsed: StopResponse = serde_json::from_str(&body).expect("parse");
+        assert_eq!(parsed.duration_sec, 18.0);
+        assert_eq!(parsed.question_count, 1);
+        assert!(parsed.exported_path.is_none());
+    }
+
+    #[tokio::test]
+    async fn dispatch_stop_is_idempotent_on_replay() {
+        let state = Arc::new(Mutex::new(sample_state()));
+        let first = dispatch(r#"{"method":"stop","meetingId":"m_1"}"#, &state).await;
+        let second = dispatch(r#"{"method":"stop","meetingId":"m_1"}"#, &state).await;
+        // Same wire payload on every replay.
+        assert_eq!(first, second);
+        let a: StopResponse = serde_json::from_str(&first).expect("parse 1");
+        let b: StopResponse = serde_json::from_str(&second).expect("parse 2");
+        assert_eq!(a, b);
+        // Cached record exists exactly once.
+        let st = state.lock().await;
+        assert_eq!(st.stopped.len(), 1);
+        assert!(st.stopped.contains_key("m_1"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_stop_removes_meeting_from_active_list() {
+        let state = Arc::new(Mutex::new(sample_state()));
+        // pre-stop: status returns 2 meetings.
+        let pre = dispatch(r#"{"method":"status"}"#, &state).await;
+        let pre_parsed: StatusResponse = serde_json::from_str(&pre).expect("parse");
+        assert_eq!(pre_parsed.meetings.len(), 2);
+
+        let _ = dispatch(r#"{"method":"stop","meetingId":"m_1"}"#, &state).await;
+
+        // post-stop: status returns only m_2.
+        let post = dispatch(r#"{"method":"status"}"#, &state).await;
+        let post_parsed: StatusResponse = serde_json::from_str(&post).expect("parse");
+        assert_eq!(post_parsed.meetings.len(), 1);
+        assert_eq!(post_parsed.meetings[0].id, "m_2");
+    }
+
+    #[tokio::test]
+    async fn dispatch_stop_unknown_id_returns_meeting_not_found() {
+        let state = Arc::new(Mutex::new(sample_state()));
+        let body = dispatch(r#"{"method":"stop","meetingId":"m_ghost"}"#, &state).await;
         let parsed: ErrorResponse = serde_json::from_str(&body).expect("parse");
-        assert_eq!(parsed.error.code, "DaemonNotImplemented");
-        assert!(parsed.error.message.contains("T-4.6"));
+        assert_eq!(parsed.error.code, "DaemonMeetingNotFound");
+        assert!(parsed.error.message.contains("m_ghost"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_stop_without_meeting_id_returns_malformed_request() {
+        let state = Arc::new(Mutex::new(sample_state()));
+        let body = dispatch(r#"{"method":"stop"}"#, &state).await;
+        let parsed: ErrorResponse = serde_json::from_str(&body).expect("parse");
+        assert_eq!(parsed.error.code, "DaemonMalformedRequest");
+        assert!(parsed.error.message.contains("meetingId"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_stop_after_status_filter_still_round_trips() {
+        // Regression: status filter narrowing must not interfere with stop's
+        // mutation of the same backing store.
+        let state = Arc::new(Mutex::new(sample_state()));
+        let _ = dispatch(r#"{"method":"status","meetingId":"m_2"}"#, &state).await;
+        let stop = dispatch(r#"{"method":"stop","meetingId":"m_2"}"#, &state).await;
+        let parsed: StopResponse = serde_json::from_str(&stop).expect("parse");
+        assert_eq!(parsed.duration_sec, 5.0);
+        assert_eq!(parsed.question_count, 0);
+        // m_2 is now in `stopped` — re-stop returns identical envelope.
+        let replay = dispatch(r#"{"method":"stop","meetingId":"m_2"}"#, &state).await;
+        assert_eq!(stop, replay);
     }
 
     #[tokio::test]
