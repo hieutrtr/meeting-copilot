@@ -13,6 +13,8 @@ use helper_daemon::{
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 
+pub mod commands;
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello {name}, from Tauri!")
@@ -124,6 +126,10 @@ pub fn run() {
             read_context_file,
             save_meeting,
             load_meetings,
+            commands::setup::setup_detect_blackhole,
+            commands::setup::setup_install_blackhole,
+            commands::setup::setup_configure_multi_output,
+            commands::setup::setup_verify_capture,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

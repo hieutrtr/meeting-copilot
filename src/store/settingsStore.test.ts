@@ -313,6 +313,7 @@ function snapshotFor(overrides: Partial<SettingsState>): SettingsState {
     apiKeys: { deepgram: "", elevenlabs: "" },
     privacyMode: "local-first",
     telemetryEnabled: false,
+    setupCompleted: false,
     setHaikuConfidenceCutoff: () => undefined,
     setHaikuEnabled: () => undefined,
     setSilenceThresholdMs: () => undefined,
@@ -322,6 +323,7 @@ function snapshotFor(overrides: Partial<SettingsState>): SettingsState {
     setApiKey: () => undefined,
     setPrivacyMode: () => undefined,
     setTelemetryEnabled: () => undefined,
+    setSetupCompleted: () => undefined,
     reset: () => undefined,
   };
   return { ...base, ...overrides };
@@ -782,5 +784,81 @@ describe("SS-S43: v1 migration zero-fills telemetryEnabled to false", () => {
     });
     const store = createSettingsStore({ storage });
     expect(store.getState().telemetryEnabled).toBe(false);
+  });
+});
+
+// ── Phase-W T-W.7 — Setup wizard sign-off flag ──────────────────────────────
+
+describe("SS-S44: default setupCompleted is false (fresh-install gate)", () => {
+  it("matches SETTINGS_DEFAULTS.setupCompleted", () => {
+    const store = createSettingsStore({ storage: createMockStorage() });
+    expect(store.getState().setupCompleted).toBe(false);
+    expect(SETTINGS_DEFAULTS.setupCompleted).toBe(false);
+  });
+});
+
+describe("SS-S45: setSetupCompleted round-trip + persistence", () => {
+  it("flip to true persists; recreate from same storage carries forward", () => {
+    const storage = createMockStorage();
+    const a = createSettingsStore({ storage });
+    a.getState().setSetupCompleted(true);
+    expect(a.getState().setupCompleted).toBe(true);
+
+    const persisted = JSON.parse(storage.inspect()[SETTINGS_STORAGE_KEY]!);
+    expect(persisted.setupCompleted).toBe(true);
+
+    const b = createSettingsStore({ storage });
+    expect(b.getState().setupCompleted).toBe(true);
+  });
+
+  it("flip back to false round-trips; coerced to boolean from non-boolean input", () => {
+    const store = createSettingsStore({ storage: createMockStorage() });
+    store.getState().setSetupCompleted(true);
+    store.getState().setSetupCompleted(false);
+    expect(store.getState().setupCompleted).toBe(false);
+
+    // @ts-expect-error — defensive runtime path.
+    store.getState().setSetupCompleted(1);
+    expect(store.getState().setupCompleted).toBe(true);
+    // @ts-expect-error
+    store.getState().setSetupCompleted(0);
+    expect(store.getState().setupCompleted).toBe(false);
+  });
+});
+
+describe("SS-S46: migration safety — pre-T-W.7 storage payloads default setupCompleted=false", () => {
+  it("v1 payload (no setupCompleted field) lifts into v2 with setupCompleted=false", () => {
+    const storage = createMockStorage({
+      [LEGACY_SETTINGS_STORAGE_KEY]: JSON.stringify({
+        haikuConfidenceCutoff: 0.9,
+        // no setupCompleted — pre-T-W.7 v1 user
+      }),
+    });
+    const store = createSettingsStore({ storage });
+    expect(store.getState().setupCompleted).toBe(false);
+    const persisted = JSON.parse(storage.inspect()[SETTINGS_STORAGE_KEY]!);
+    expect(persisted.setupCompleted).toBe(false);
+  });
+
+  it("v2 payload missing the field reads as false (existing user without wizard run)", () => {
+    const storage = createMockStorage({
+      [SETTINGS_STORAGE_KEY]: JSON.stringify({
+        telemetryEnabled: true,
+        // no setupCompleted — existing v2 user from before T-W.7
+      }),
+    });
+    const store = createSettingsStore({ storage });
+    expect(store.getState().setupCompleted).toBe(false);
+    expect(store.getState().telemetryEnabled).toBe(true);
+  });
+
+  it("malformed setupCompleted value coerces to default (false)", () => {
+    const storage = createMockStorage({
+      [SETTINGS_STORAGE_KEY]: JSON.stringify({
+        setupCompleted: "yes",
+      }),
+    });
+    const store = createSettingsStore({ storage });
+    expect(store.getState().setupCompleted).toBe(false);
   });
 });

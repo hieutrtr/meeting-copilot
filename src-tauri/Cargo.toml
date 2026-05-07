@@ -22,3 +22,10 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 helper-daemon = { path = "../crates/helper-daemon" }
+# T-W.7 — Tauri command wrappers in `src/commands/setup.rs` need direct access
+# to the wizard's typed enums (`BlackHoleStatus`, `VerifyReport`, `ConfigureError`)
+# so the IPC DTOs can be built from `From<...>` conversions without round-
+# tripping through helper-daemon. Production probes/runners/creators are
+# constructed inside the commands (RealCoreAudioProbe / RealAggregateDeviceCreator
+# / RealAudioInputProbe / RealFilesystem / RealProcessRunner).
+audio-capture = { path = "../crates/audio-capture" }

@@ -111,6 +111,12 @@ export interface SettingsValues {
   // turn this on. The append loop reads this flag on EVERY event so toggling
   // takes effect on the next provider event with no restart.
   telemetryEnabled: boolean;
+  // Phase-W T-W.7 addition — gate flag for the BlackHole Setup Wizard. Default
+  // `false` so a fresh install (or a v1/v2-without-this-key payload) sees the
+  // wizard on first launch. The wizard sets it to `true` when the user
+  // completes the Done step. App.tsx reads this to decide whether to render
+  // `<SetupWizard />` or the meeting UI.
+  setupCompleted: boolean;
 }
 
 export interface SettingsState extends SettingsValues {
@@ -127,6 +133,8 @@ export interface SettingsState extends SettingsValues {
   setPrivacyMode: (mode: PrivacyMode) => void;
   // Phase 3 T-3.9 addition — opt-in telemetry toggle.
   setTelemetryEnabled: (b: boolean) => void;
+  // Phase-W T-W.7 — wizard sign-off; flips the gate flag App.tsx reads.
+  setSetupCompleted: (b: boolean) => void;
   reset: () => void;
 }
 
@@ -146,6 +154,7 @@ export const SETTINGS_DEFAULTS: SettingsValues = {
   apiKeys: { deepgram: "", elevenlabs: "" },
   privacyMode: DEFAULT_PRIVACY_MODE,
   telemetryEnabled: false,
+  setupCompleted: false,
 };
 
 function clamp(n: number, lo: number, hi: number): number {
@@ -204,6 +213,10 @@ function coerceLoaded(raw: unknown): SettingsValues {
       typeof r.telemetryEnabled === "boolean"
         ? r.telemetryEnabled
         : SETTINGS_DEFAULTS.telemetryEnabled,
+    setupCompleted:
+      typeof r.setupCompleted === "boolean"
+        ? r.setupCompleted
+        : SETTINGS_DEFAULTS.setupCompleted,
   };
 }
 
@@ -284,6 +297,7 @@ function pickValues(s: SettingsValues): SettingsValues {
     apiKeys: { ...s.apiKeys },
     privacyMode: s.privacyMode,
     telemetryEnabled: s.telemetryEnabled,
+    setupCompleted: s.setupCompleted,
   };
 }
 
@@ -351,6 +365,10 @@ export function createSettingsStore(
     },
     setTelemetryEnabled: (b: boolean) => {
       set({ telemetryEnabled: !!b });
+      persistToStorage(storage, key, pickValues(get()));
+    },
+    setSetupCompleted: (b: boolean) => {
+      set({ setupCompleted: !!b });
       persistToStorage(storage, key, pickValues(get()));
     },
     reset: () => {
