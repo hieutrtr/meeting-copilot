@@ -84,29 +84,11 @@ describe("MCP server skeleton (T-4.2)", () => {
   });
 
   // T-4.3 lit `bridge_meeting_install`; T-4.4 lit `bridge_meeting_start`;
-  // T-4.5 lit `bridge_meeting_status`; T-4.6 lit `bridge_meeting_stop`
-  // (positive integration tests sit below the describe.each block — they use
-  // the in-memory client + a buildServer handler override so the tests never
-  // dial a real Unix socket).
-  describe.each([
-    {
-      name: "bridge_meeting_export",
-      futureTask: "T-4.7",
-      args: { meetingId: "m_42", format: "markdown" } as Record<string, unknown>,
-    },
-  ])("placeholder for %s", ({ name, futureTask, args }) => {
-    it(`returns NotImplemented envelope tagged for ${futureTask}`, async () => {
-      const result = (await client.callTool({
-        name,
-        arguments: args,
-      })) as CallToolResult;
-      expect(result.isError).toBe(true);
-      expect(Array.isArray(result.content)).toBe(true);
-      expect(result.content[0]?.type).toBe("text");
-      expect(result.content[0]?.text).toMatch(/^NotImplemented: /);
-      expect(result.content[0]?.text).toContain(futureTask);
-    });
-  });
+  // T-4.5 lit `bridge_meeting_status`; T-4.6 lit `bridge_meeting_stop`;
+  // T-4.7 lit `bridge_meeting_export` — the placeholder list is now empty.
+  // Positive integration tests sit below; they use the in-memory client +
+  // a buildServer handler override so the tests never touch a real socket
+  // or filesystem outside an isolated tmpdir.
 
   it("bridge_meeting_start (T-4.4) end-to-end via injected handler — happy path", async () => {
     // Use an isolated buildServer with a handler override that injects test
@@ -279,14 +261,17 @@ describe("MCP server skeleton (T-4.2)", () => {
     })) as CallToolResult;
     expect(result.isError).toBe(true);
     expect(result.content[0]?.type).toBe("text");
-    // Server stays alive for the next call. Use the still-placeholder tool
-    // (export, T-4.7) so this test stays a placeholder-shape probe rather
-    // than depending on whichever handlers are real-implemented.
+    // Server stays alive for the next call. The default export handler uses
+    // a stub loader that returns null (production wiring is Phase 4.x), so
+    // a valid-shape arg still surfaces an isError envelope (MeetingNotFound)
+    // — proving the dispatcher recovers from a thrown Zod error in the
+    // previous call and continues to dispatch subsequent requests.
     const second = (await client.callTool({
       name: "bridge_meeting_export",
       arguments: { meetingId: "m_42", format: "markdown" },
     })) as CallToolResult;
     expect(second.isError).toBe(true);
+    expect(second.content[0]?.text).toMatch(/^MeetingNotFound:/);
   });
 
   it("bridge_meeting_stop (T-4.6) end-to-end via injected handler — happy path", async () => {
@@ -329,6 +314,79 @@ describe("MCP server skeleton (T-4.2)", () => {
     } finally {
       await isolatedClient.close();
       await server.close();
+    }
+  });
+
+  it("bridge_meeting_export (T-4.7) end-to-end via injected handler — happy path", async () => {
+    const { mkdtempSync, readFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { sep, resolve: pathResolve } = await import("node:path");
+    const tmp = mkdtempSync(`${tmpdir()}${sep}t47-server-`);
+    const STARTED_AT = 1_700_000_000_000;
+    const fixtureSnapshot = {
+      meeting: {
+        id: "m_int",
+        title: "Server-integration sync",
+        startedAt: STARTED_AT,
+        endedAt: STARTED_AT + 60_000,
+        sttProvider: "mlx",
+        model: "claude-sonnet-4-6",
+        privacyMode: "local-first",
+        status: "ended",
+      },
+      chunks: [
+        {
+          id: "c1",
+          meetingId: "m_int",
+          text: "first utterance",
+          startTs: STARTED_AT + 1_000,
+          endTs: STARTED_AT + 2_000,
+          isFinal: true,
+        },
+      ],
+      questions: [],
+    };
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const { handleExport } = await import("./handlers/export");
+    let loadCallCount = 0;
+    const server = buildServer({
+      handlers: {
+        bridge_meeting_export: (args) =>
+          handleExport(args, {
+            exportRoot: tmp,
+            loadSnapshot: async (id) => {
+              loadCallCount += 1;
+              return id === fixtureSnapshot.meeting.id ? fixtureSnapshot : null;
+            },
+          }),
+      },
+    });
+    await server.connect(serverTransport);
+    const isolatedClient = new Client(
+      { name: "t47-test-client", version: "0.0.0" },
+      { capabilities: {} },
+    );
+    await isolatedClient.connect(clientTransport);
+    try {
+      const result = (await isolatedClient.callTool({
+        name: "bridge_meeting_export",
+        arguments: { meetingId: "m_int", format: "markdown" },
+      })) as CallToolResult;
+      expect(result.isError).toBeFalsy();
+      expect(loadCallCount).toBe(1);
+      const text = result.content[0]?.text ?? "";
+      expect(text).toContain('"path"');
+      expect(text).toContain('"sizeBytes"');
+      // The path landed under the injected exportRoot.
+      const expectedPath = pathResolve(tmp, "m_int.md");
+      expect(text).toContain(expectedPath);
+      // The on-disk content is the markdown body produced by the renderer.
+      const onDisk = readFileSync(expectedPath, "utf8");
+      expect(onDisk).toContain("# Server-integration sync");
+    } finally {
+      await isolatedClient.close();
+      await server.close();
+      rmSync(tmp, { recursive: true, force: true });
     }
   });
 
