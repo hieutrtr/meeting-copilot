@@ -176,6 +176,7 @@ const { useMeetingStore } = await import("../store/meetingStore");
 const { useQuestionStore } = await import("../store/questionStore");
 const { useContextStore } = await import("../store/contextStore");
 const { useHistoryStore } = await import("../store/historyStore");
+const { useSettingsStore } = await import("../store/settingsStore");
 
 // scrollIntoView shim (TranscriptView calls it for autoscroll).
 const originalScrollIntoView = Element.prototype.scrollIntoView;
@@ -202,6 +203,11 @@ beforeEach(() => {
   useQuestionStore.getState().clear();
   useContextStore.getState().clear();
   useHistoryStore.getState().clear();
+  // T-W.7 — App now gates the meeting UI behind the BlackHole Setup Wizard.
+  // The end-to-end happy-path tests skip the wizard by pre-flipping the
+  // gate flag; the wizard's own RTL suite covers its FSM in isolation, and
+  // App.test.tsx covers the gate-flag transitions.
+  useSettingsStore.getState().setSetupCompleted(true);
   process.env.ANTHROPIC_API_KEY = "test-key";
 });
 

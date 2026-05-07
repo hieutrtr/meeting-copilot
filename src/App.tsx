@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import "./App.css";
 
@@ -8,10 +8,21 @@ import { ContextLoader } from "./components/ContextLoader";
 import { MeetingControls } from "./components/MeetingControls";
 import { PastMeetings } from "./components/PastMeetings";
 import { SettingsSheet } from "./components/SettingsSheet";
+import {
+  SetupWizard,
+  type SetupWizardInvokers,
+} from "./components/SetupWizard/SetupWizard";
+import type { BlackHoleStatus } from "./components/SetupWizard/useSetupWizard";
 import { TranscriptView } from "./components/TranscriptView";
 import { useTranscriptStream } from "./hooks/useTranscriptStream";
 import { useAskClaude } from "./hooks/useAskClaude";
 import { useMeetingPersist } from "./hooks/useMeetingPersist";
+import {
+  setupConfigureMultiOutput,
+  setupDetectBlackhole,
+  setupInstallBlackhole,
+  setupVerifyCapture,
+} from "./lib/setupCommands";
 import { isTtsAllowed } from "./privacy/privacyMode";
 import { useContextStore } from "./store/contextStore";
 import { useQuestionStore } from "./store/questionStore";
@@ -19,6 +30,15 @@ import { useSettingsStore } from "./store/settingsStore";
 import { ENABLE_TTS } from "./tts/featureFlag";
 
 const RECENT_TRANSCRIPT_CHUNK_COUNT = 12;
+
+// T-W.5 verify FFI default duration. Mirrors the wizard's Verify-step copy
+// ("Play 5 s of audio") and the helper-daemon's RealAudioInputProbe 5_000 ms
+// window from `crates/audio-capture/src/verify.rs`.
+const SETUP_VERIFY_DURATION_MS = 5_000;
+// Device-hint string handed to the verify Tauri command. The Rust side
+// resolves this against cpal's enumerate_devices output (case-insensitive
+// substring match) — `"blackhole"` matches "BlackHole 2ch" / "BlackHole 16ch".
+const SETUP_VERIFY_DEVICE_HINT = "blackhole";
 
 // Phase 3 T-3.7 — TTS Speak handler. Default-OFF: ENABLE_TTS reads
 // `import.meta.env.VITE_ENABLE_TTS` and is `false` for every default Vite
@@ -52,6 +72,49 @@ async function speakAnswer(text: string): Promise<void> {
 }
 
 export default function App() {
+  const setupCompleted = useSettingsStore((s) => s.setupCompleted);
+  const setSetupCompleted = useSettingsStore((s) => s.setSetupCompleted);
+
+  // The setup wizard's `Configure` step has no dedicated UID picker, so the
+  // App holds the most-recent detect status here and forwards the BlackHole
+  // UID into `setup_configure_multi_output`. Rendering reads do not depend
+  // on this, so a ref (rather than state) is correct.
+  const detectStatusRef = useRef<BlackHoleStatus | null>(null);
+
+  const wizardInvokers = useMemo<SetupWizardInvokers>(
+    () => ({
+      detect: async () => {
+        const status = await setupDetectBlackhole();
+        detectStatusRef.current = status;
+        return status;
+      },
+      // brew streaming is not surfaced via Tauri events yet (Phase-W follow-up
+      // — `helper_daemon::install_via_brew` blocks until the cask completes),
+      // so the onLine callback is intentionally unused. The wizard still
+      // renders an empty log <pre> + the InstallReport on completion.
+      install: async (_onLine) => setupInstallBlackhole(),
+      configure: async () => {
+        const last = detectStatusRef.current;
+        const blackholeUid =
+          last &&
+          (last.kind === "installed_not_configured" ||
+            last.kind === "configured")
+            ? last.blackhole_uid
+            : "";
+        const subDeviceUids = blackholeUid ? [blackholeUid] : [];
+        const result = await setupConfigureMultiOutput(subDeviceUids);
+        return { deviceId: result.device_id };
+      },
+      verify: async (_deviceId) =>
+        setupVerifyCapture(SETUP_VERIFY_DEVICE_HINT, SETUP_VERIFY_DURATION_MS),
+    }),
+    [],
+  );
+
+  const onWizardDone = useCallback(() => {
+    setSetupCompleted(true);
+  }, [setSetupCompleted]);
+
   const { chunks } = useTranscriptStream();
   const contextContent = useContextStore((s) => s.content);
   const latestQuestion = useQuestionStore((s) => s.questions[0] ?? null);
@@ -98,6 +161,17 @@ export default function App() {
     // transcript-snapshot in scope at fire time is the right one.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latestQuestion?.id, contextContent]);
+
+  // T-W.7 — gate the meeting UI behind the BlackHole Setup Wizard. On a
+  // fresh install (or any persisted settings payload missing the
+  // `setupCompleted` key — see `coerceLoaded` in `settingsStore.ts`), the
+  // wizard renders as a modal overlay before the meeting UI. The Done step
+  // calls `onWizardDone` which flips `setupCompleted=true`; the next render
+  // unmounts the wizard and the meeting UI takes over. Users can re-run the
+  // wizard from the Settings panel by toggling the flag back to `false`.
+  if (!setupCompleted) {
+    return <SetupWizard invokers={wizardInvokers} onDone={onWizardDone} />;
+  }
 
   return (
     <main className="container">
