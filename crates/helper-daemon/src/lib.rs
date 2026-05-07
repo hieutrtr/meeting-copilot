@@ -9,17 +9,26 @@
 // the Tauri app's binary entrypoint in Phase 4.x wires `serve` into a tokio runtime.
 // T-4.6 fills in the `stop` method on the same RPC surface (idempotent flush) + adds
 // `Repo::mark_meeting_ended` for the entrypoint's persist-on-shutdown side-effect.
+// T-4.9 adds the dashboard iframe embed HTTP layer (`crate::embed_http`) + the
+// scope-bounded token store (`crate::auth`) that gates every embed request.
 
+pub mod auth;
 pub mod bridge;
 pub mod context;
+pub mod embed_http;
 pub mod mcp_rpc;
 pub mod repo;
 
+pub use auth::{AuthError, Clock as AuthClock, TokenStore, TOKEN_TTL};
 pub use bridge::{
     BridgeError, EventBridge, EventSink, MeetingStateEvent, MeetingStatus, RecorderSink,
     TranscriptChunkEvent,
 };
 pub use context::{read_context_file, ContextError, ContextFile, ALLOWED_EXTENSIONS};
+pub use embed_http::{
+    router as embed_router, Clock as EmbedClock, EmbedEvent, EmbedState, TokenQuery,
+    DEFAULT_ALLOWED_ORIGIN, DEFAULT_BIND_ADDR,
+};
 pub use mcp_rpc::{
     dispatch, recover_stale_socket, serve, serve_once, ErrorBody, ErrorResponse,
     MeetingStatusEntry, RpcError, RpcState, StatusResponse, StopRecord, StopResponse,
