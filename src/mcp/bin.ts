@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { registerMeetingCopilot } from "../discovery/bridgeConfig";
 import { MCP_SERVER_VERSION, startStdioServer } from "./server";
 
 function readPackageVersion(): string {
@@ -22,6 +23,32 @@ function readPackageVersion(): string {
   const raw = readFileSync(pkgPath, "utf8");
   const pkg = JSON.parse(raw) as { version?: string };
   return pkg.version ?? "0.0.0";
+}
+
+/** Best-effort discovery: register meeting-copilot under
+ * `$CLAUDE_BRIDGE_HOME/config.json`'s `meeting_copilots[]`. Failure here is
+ * NEVER fatal — the MCP server is still usable over stdio without claude-bridge
+ * knowing about us. We log to stderr and continue. */
+function tryRegisterDiscovery(): void {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const binPath = resolve(here, "bin.ts");
+    const result = registerMeetingCopilot({
+      version: readPackageVersion(),
+      binPath,
+    });
+    if (!result.alreadyRegistered) {
+      process.stderr.write(
+        `meeting-copilot: registered in ${result.configPath}\n`,
+      );
+    }
+  } catch (err) {
+    const code = (err as { code?: string }).code ?? "Unknown";
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(
+      `meeting-copilot: discovery skipped (${code}): ${message}\n`,
+    );
+  }
 }
 
 async function main(): Promise<void> {
@@ -47,6 +74,7 @@ async function main(): Promise<void> {
     return;
   }
 
+  tryRegisterDiscovery();
   await startStdioServer();
 }
 
