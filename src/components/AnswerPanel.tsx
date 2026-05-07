@@ -1,4 +1,5 @@
 // Phase 1 T-1.11 — AnswerPanel: streaming markdown render + Copy button.
+// Phase 3 T-3.7 — optional "Speak answer" button (TTS feature flag, default OFF).
 //
 // Pure presentational component. The driver (`useAskClaude`) owns the
 // async-generator and pumps deltas into `text` via `useState`. Keeping render
@@ -13,13 +14,22 @@
 // Cache-hit + cost surface land in this component (instead of in
 // `useAskClaude`) because they're cosmetic — the hook's `result` object is
 // already the source of truth.
+//
+// TTS seam (T-3.7): when the parent passes `onSpeak`, a "Speak answer" button
+// appears alongside the Copy button (status = "done" only). When the prop is
+// undefined, no button renders — no DOM presence, no event listeners, no
+// imported audio code path. The wiring in `App.tsx` gates the prop on the
+// `ENABLE_TTS` constant from `src/tts/featureFlag.ts` so the default install
+// has zero TTS surface.
 
-import { useState, type ReactNode } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 
 import type { AnthropicUsage } from "../llm/pricing";
 
 export type AnswerPanelStatus = "idle" | "streaming" | "done" | "error";
+
+export type AnswerPanelSpeakStatus = "idle" | "speaking" | "done" | "error";
 
 export interface AnswerPanelProps {
   status: AnswerPanelStatus;
@@ -29,6 +39,13 @@ export interface AnswerPanelProps {
   costUsd?: number;
   cacheReadRatio?: number;
   onCopy?: (text: string) => void | Promise<void>;
+  /** Phase 3 T-3.7 TTS seam. When defined, renders a "Speak answer" button
+   *  while `status === "done"`. When undefined, the button does NOT render
+   *  (no DOM presence). The handler should resolve when synthesis kicks off
+   *  (NOT when audio finishes playing) so the AC-4 wall-clock budget stays
+   *  tight. The component manages local `idle → speaking → done | error`
+   *  state internally; the parent doesn't need to track it. */
+  onSpeak?: (text: string) => void | Promise<void>;
 }
 
 const PLACEHOLDER = "Mark a question to see the answer here.";
@@ -55,10 +72,15 @@ export function AnswerPanel({
   costUsd,
   cacheReadRatio,
   onCopy,
+  onSpeak,
 }: AnswerPanelProps): ReactNode {
   const [copied, setCopied] = useState(false);
+  const [speakStatus, setSpeakStatus] =
+    useState<AnswerPanelSpeakStatus>("idle");
+  const speakInFlight = useRef(false);
 
   const showCopy = status === "done";
+  const showSpeak = status === "done" && typeof onSpeak === "function";
   const showCacheBadge =
     typeof cacheReadRatio === "number" && cacheReadRatio > 0.5;
   const showCost = typeof costUsd === "number";
@@ -73,6 +95,27 @@ export function AnswerPanel({
       // Swallow copy errors — UI just won't flip to "Copied!".
     }
   }
+
+  // Speak handler — local state machine: idle → speaking → done | error. The
+  // ref-based debounce mirrors SettingsSheet's test-connection button (T-3.6):
+  // a second click while `speaking` is a no-op so a slow synthesis doesn't
+  // stack handlers. Errors flip to a transient `error` state then settle back
+  // to `idle` after 2 s so the user can retry without a remount.
+  const handleSpeak = useCallback(async () => {
+    if (!onSpeak) return;
+    if (speakInFlight.current) return;
+    speakInFlight.current = true;
+    setSpeakStatus("speaking");
+    try {
+      await onSpeak(text);
+      setSpeakStatus("done");
+    } catch {
+      setSpeakStatus("error");
+      window.setTimeout(() => setSpeakStatus("idle"), 2000);
+    } finally {
+      speakInFlight.current = false;
+    }
+  }, [onSpeak, text]);
 
   if (status === "error") {
     const raw = error?.message ?? "Unknown error";
@@ -125,6 +168,34 @@ export function AnswerPanel({
           {copied ? "Copied!" : "Copy"}
         </button>
       )}
+
+      {showSpeak && (
+        <button
+          type="button"
+          onClick={handleSpeak}
+          disabled={speakStatus === "speaking"}
+          data-testid="answer-speak"
+          data-speak-status={speakStatus}
+          aria-live="polite"
+          className="answer-panel__speak"
+        >
+          {speakLabel(speakStatus)}
+        </button>
+      )}
     </section>
   );
+}
+
+function speakLabel(s: AnswerPanelSpeakStatus): string {
+  switch (s) {
+    case "speaking":
+      return "Speaking…";
+    case "done":
+      return "Speak again";
+    case "error":
+      return "Speak failed — retry";
+    case "idle":
+    default:
+      return "Speak answer";
+  }
 }

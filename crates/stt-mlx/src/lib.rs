@@ -38,6 +38,14 @@
 pub mod provider;
 pub mod providers;
 
+// Phase 3 T-3.7 — TTS interface + ElevenLabs TTS adapter, gated by the `tts`
+// cargo feature (default OFF per ARCH §4). Default builds dead-strip the entire
+// module — no `tts/*.rs` file is compiled, no public symbol is reachable. The TS
+// side gates on `VITE_ENABLE_TTS` (also default OFF). See `tts/provider.rs` for
+// the trait + types and `tts/elevenlabs.rs` for the adapter.
+#[cfg(feature = "tts")]
+pub mod tts;
+
 pub use provider::{FakeStt, SttError, SttProvider, SttSegment};
 pub use providers::{factory, BackoffConfig, FactoryError, FakeConfig, ProviderConfig, ProviderKind};
 
@@ -49,3 +57,9 @@ pub use providers::{DeepgramAdapter, DeepgramConfig};
 
 #[cfg(feature = "elevenlabs")]
 pub use providers::{ElevenLabsAdapter, ElevenLabsConfig};
+
+#[cfg(feature = "tts")]
+pub use tts::{
+    ElevenLabsTtsAdapter, ElevenLabsTtsConfig, TtsAudioChunk, TtsError, TtsProvider, TtsRequest,
+    TtsSpeakOptions, TtsTransport,
+};

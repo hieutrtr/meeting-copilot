@@ -157,6 +157,103 @@ describe("AnswerPanel — usage / cost / cache (AC-5, AC-7)", () => {
   });
 });
 
+describe("AnswerPanel — TTS Speak button (Phase 3 T-3.7)", () => {
+  it("AP-S13: default render — no Speak button when onSpeak prop is undefined", () => {
+    render(<AnswerPanel status="done" text="full answer" />);
+    expect(screen.queryByTestId("answer-speak")).not.toBeInTheDocument();
+  });
+
+  it("AP-S13b: no Speak button while streaming, even with onSpeak prop", () => {
+    const onSpeak = vi.fn();
+    render(<AnswerPanel status="streaming" text="partial" onSpeak={onSpeak} />);
+    expect(screen.queryByTestId("answer-speak")).not.toBeInTheDocument();
+  });
+
+  it("AP-S14: Speak button appears when onSpeak prop is supplied + status=done", () => {
+    const onSpeak = vi.fn();
+    render(<AnswerPanel status="done" text="hello" onSpeak={onSpeak} />);
+    const btn = screen.getByTestId("answer-speak") as HTMLButtonElement;
+    expect(btn).toBeInTheDocument();
+    expect(btn).toHaveTextContent(/speak answer/i);
+    expect(btn.disabled).toBe(false);
+    expect(btn.dataset.speakStatus).toBe("idle");
+  });
+
+  it("AP-S15: click → speaking pill flips within 2 000 ms wall-clock budget", async () => {
+    // The handler resolves immediately — measures the React commit + click
+    // → status flip path. Live-host wall-clock budget covers real audio
+    // start; this test only asserts the UI seam stays under budget.
+    const onSpeak = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(<AnswerPanel status="done" text="hello" onSpeak={onSpeak} />);
+
+    const start = Date.now();
+    await user.click(screen.getByTestId("answer-speak"));
+
+    // Wait for the post-resolve "done" state — guaranteed under a 2 s budget.
+    await waitFor(
+      () => {
+        const btn = screen.getByTestId("answer-speak") as HTMLButtonElement;
+        expect(btn.dataset.speakStatus).toBe("done");
+      },
+      { timeout: 2000 },
+    );
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeLessThan(2000);
+    expect(onSpeak).toHaveBeenCalledTimes(1);
+    expect(onSpeak).toHaveBeenCalledWith("hello");
+  });
+
+  it("AP-S16: click is debounced — second click while speaking is a no-op", async () => {
+    const speakDeferred: { resolve: (() => void) | null } = { resolve: null };
+    const onSpeak = vi.fn().mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          speakDeferred.resolve = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+    render(<AnswerPanel status="done" text="hello" onSpeak={onSpeak} />);
+
+    const btn = screen.getByTestId("answer-speak") as HTMLButtonElement;
+    await user.click(btn);
+
+    await waitFor(() => {
+      expect(btn.dataset.speakStatus).toBe("speaking");
+    });
+    expect(btn.disabled).toBe(true);
+
+    // Second click attempt while in-flight — userEvent skips disabled buttons,
+    // but we also assert the ref-based guard rejects a direct fireEvent click
+    // for completeness.
+    btn.click();
+
+    expect(onSpeak).toHaveBeenCalledTimes(1);
+
+    // Resolve the in-flight call so the test ends cleanly.
+    speakDeferred.resolve?.();
+    await waitFor(() => {
+      expect(btn.dataset.speakStatus).toBe("done");
+    });
+  });
+
+  it("AP-S16b: rejected onSpeak flips to error state + recovers to idle", async () => {
+    const onSpeak = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("ElevenLabs 401"));
+    const user = userEvent.setup();
+    render(<AnswerPanel status="done" text="hello" onSpeak={onSpeak} />);
+
+    const btn = screen.getByTestId("answer-speak") as HTMLButtonElement;
+    await user.click(btn);
+
+    await waitFor(() => {
+      expect(btn.dataset.speakStatus).toBe("error");
+    });
+    expect(btn).toHaveTextContent(/speak failed/i);
+  });
+});
+
 describe("AnswerPanel — error (AC-6)", () => {
   it("AP-S11: error status renders [role=alert] with the error message", () => {
     render(

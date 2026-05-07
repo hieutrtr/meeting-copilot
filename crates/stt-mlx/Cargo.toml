@@ -21,6 +21,11 @@ deepgram = ["dep:tungstenite"]
 # of `deepgram`: enabling either pulls in `tungstenite`. Both adapters share the
 # `providers::backoff::BackoffConfig` type (always compiled, no transport deps).
 elevenlabs = ["dep:tungstenite"]
+# Phase 3 T-3.7 — compiles the TTS trait + ElevenLabs TTS adapter. Default OFF
+# per ARCH §4 ("V1 không bật TTS mặc định"). Pulls in zero new dependencies — the
+# adapter is transport-injected (`TtsTransport` trait); a future Phase 3.x patch wires
+# `reqwest::blocking::Client` behind the same flag once live HTTP is required.
+tts = []
 
 [dependencies]
 audio-capture = { path = "../audio-capture" }

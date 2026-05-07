@@ -13,8 +13,40 @@ import { useAskClaude } from "./hooks/useAskClaude";
 import { useMeetingPersist } from "./hooks/useMeetingPersist";
 import { useContextStore } from "./store/contextStore";
 import { useQuestionStore } from "./store/questionStore";
+import { ENABLE_TTS } from "./tts/featureFlag";
 
 const RECENT_TRANSCRIPT_CHUNK_COUNT = 12;
+
+// Phase 3 T-3.7 — TTS Speak handler. Default-OFF: ENABLE_TTS reads
+// `import.meta.env.VITE_ENABLE_TTS` and is `false` for every default Vite
+// build. The handler is dynamically imported on first click so the TTS code
+// path is dead-stripped from the initial bundle when the flag is disabled.
+// Live audio playback (Web Audio context, BlackHole virtual-output routing)
+// is deferred to Phase 3.x — this stub resolves immediately so the AnswerPanel
+// state machine settles back to "done" after click. The underlying
+// `ElevenLabsTts` adapter is the live wire-up seam.
+async function speakAnswer(text: string): Promise<void> {
+  // The dynamic import keeps `elevenLabsTts.ts` out of the default chunk
+  // when ENABLE_TTS is false; with ENABLE_TTS true, Vite still code-splits.
+  const mod = await import("./tts/elevenLabsTts");
+  // Read settings store lazily here to avoid a top-level import cycle with
+  // the AnswerPanel's wiring tests (which don't construct a real store).
+  const { useSettingsStore } = await import("./store/settingsStore");
+  const apiKey = useSettingsStore.getState().apiKeys.elevenlabs;
+  if (!apiKey) {
+    throw new Error(mod.ELEVENLABS_TTS_API_KEY_MISSING_MESSAGE);
+  }
+  const tts = new mod.ElevenLabsTts({ apiKey });
+  // Drain the iterable. Audio playback (the actual `<audio>` / Web Audio
+  // wiring) is the deferred Phase 3.x seam — this loop just exercises the
+  // synthesis round-trip so the button settles back to "done" once the
+  // first chunk lands.
+  for await (const _chunk of tts.speak(text, { voice: "" })) {
+    // Discard until live audio routing lands.
+    void _chunk;
+    break;
+  }
+}
 
 export default function App() {
   const { chunks } = useTranscriptStream();
@@ -78,6 +110,7 @@ export default function App() {
         usage={usage}
         costUsd={costUsd}
         cacheReadRatio={cacheReadRatio}
+        onSpeak={ENABLE_TTS ? speakAnswer : undefined}
       />
       <PastMeetings />
       <details className="settings-sheet__details">
