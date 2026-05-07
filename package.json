@@ -1,7 +1,7 @@
 {
   "name": "meeting-copilot",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Meeting Copilot — Phase 0 scaffold (T-0.8). See docs/IMPLEMENTATION-PLAN.md.",
   "type": "module",
   "bin": {

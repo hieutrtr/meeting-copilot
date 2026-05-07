@@ -1,6 +1,6 @@
 [package]
 name = "meeting-copilot"
-version = "1.0.0"
+version = "1.0.1"
 description = "Meeting Copilot — Phase 0 scaffold (T-0.8)"
 authors = ["Meeting Copilot dev"]
 edition = "2021"

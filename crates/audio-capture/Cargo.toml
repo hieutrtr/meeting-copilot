@@ -1,6 +1,6 @@
 [package]
 name = "audio-capture"
-version = "1.0.0"
+version = "1.0.1"
 description = "Meeting Copilot audio capture — Phase 1 T-1.3 (cpal mic source + WAV fixture source behind AudioSource trait)."
 edition = "2021"
 rust-version = "1.77"
