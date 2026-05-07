@@ -83,12 +83,10 @@ describe("MCP server skeleton (T-4.2)", () => {
     }
   });
 
+  // T-4.3 lit `bridge_meeting_install` — no longer in the placeholder list.
+  // Remaining 4 placeholders below; the install integration test follows the
+  // describe.each block.
   describe.each([
-    {
-      name: "bridge_meeting_install",
-      futureTask: "T-4.3",
-      args: {} as Record<string, unknown>,
-    },
     {
       name: "bridge_meeting_start",
       futureTask: "T-4.4",
@@ -128,6 +126,22 @@ describe("MCP server skeleton (T-4.2)", () => {
     });
   });
 
+  it("bridge_meeting_install (T-4.3) probes a missing path and returns installed:false", async () => {
+    // Pass an explicit non-existent path so the test never reads the real
+    // `/Applications/Meeting Copilot.app` on a developer machine.
+    const result = (await client.callTool({
+      name: "bridge_meeting_install",
+      arguments: {
+        path: "/var/empty/__t43_integration_meeting_copilot__.app",
+      },
+    })) as CallToolResult;
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0]?.type).toBe("text");
+    const text = result.content[0]?.text ?? "";
+    expect(text).toContain('"installed": false');
+    expect(text).toMatch(/github\.com|releases/);
+  });
+
   it("rejects unknown tool names with a JSON-RPC error", async () => {
     await expect(
       client.callTool({ name: "bridge_dashboard_install", arguments: {} }),
@@ -141,9 +155,11 @@ describe("MCP server skeleton (T-4.2)", () => {
     })) as CallToolResult;
     expect(result.isError).toBe(true);
     expect(result.content[0]?.type).toBe("text");
-    // Server stays alive for the next call.
+    // Server stays alive for the next call. Use a still-placeholder tool
+    // (status, T-4.5) so this test stays a placeholder-shape probe rather
+    // than depending on whichever handlers are real-implemented.
     const second = (await client.callTool({
-      name: "bridge_meeting_install",
+      name: "bridge_meeting_status",
       arguments: {},
     })) as CallToolResult;
     expect(second.isError).toBe(true);
