@@ -1,0 +1,49 @@
+{
+  "meeting": {
+    "id": "m_e2e",
+    "title": "T-4.10 E2E seed sync",
+    "startedAt": 1700000000000,
+    "endedAt": 1700000060000,
+    "sttProvider": "mlx",
+    "model": "claude-sonnet-4-6",
+    "privacyMode": "local-first",
+    "status": "ended"
+  },
+  "chunks": [
+    {
+      "id": "c1",
+      "meetingId": "m_e2e",
+      "text": "the e2e seeded transcript text alpha",
+      "startTs": 1700000001000,
+      "endTs": 1700000002000,
+      "isFinal": true
+    },
+    {
+      "id": "c2",
+      "meetingId": "m_e2e",
+      "text": "the e2e seeded transcript text beta",
+      "startTs": 1700000003000,
+      "endTs": 1700000004000,
+      "isFinal": true
+    }
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "meetingId": "m_e2e",
+      "text": "what is the e2e summary question?",
+      "detectedTs": 1700000005000,
+      "method": "rule-based"
+    }
+  ],
+  "answer": {
+    "id": "a1",
+    "questionId": "q1",
+    "text": "the e2e summary answer body covers everything seeded",
+    "generatedAt": 1700000006000,
+    "model": "claude-sonnet-4-6",
+    "tokensIn": 1000,
+    "tokensOut": 200,
+    "cachedRatio": 0.5
+  }
+}

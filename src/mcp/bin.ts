@@ -14,7 +14,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { registerMeetingCopilot } from "../discovery/bridgeConfig";
-import { MCP_SERVER_VERSION, startStdioServer } from "./server";
+import {
+  MCP_SERVER_VERSION,
+  startServerOnTransport,
+  startStdioServer,
+} from "./server";
 
 function readPackageVersion(): string {
   const here = dirname(fileURLToPath(import.meta.url));
@@ -51,6 +55,26 @@ function tryRegisterDiscovery(): void {
   }
 }
 
+/** T-4.10 — env-gated E2E mode. When `MEETING_COPILOT_E2E_FIXTURE_PATH` is set,
+ *  the bin boots with a fixture-backed handler table rather than the production
+ *  defaults. Discovery is **skipped** in this branch so a developer running the
+ *  E2E test never accidentally mutates `~/.claude-bridge/config.json`.
+ *  Production callers leave the env var unset; the branch is dead code on the
+ *  shipping path. */
+async function startE2EServer(fixturePath: string): Promise<void> {
+  const { loadE2EFixture, buildE2EHandlers } = await import("./e2eHarness");
+  const { StdioServerTransport } = await import(
+    "@modelcontextprotocol/sdk/server/stdio.js"
+  );
+  const fixture = loadE2EFixture(fixturePath);
+  const handlers = buildE2EHandlers(fixture);
+  const transport = new StdioServerTransport();
+  await startServerOnTransport(transport, { handlers });
+  process.stderr.write(
+    `meeting-copilot-mcp E2E mode (fixture=${fixturePath})\n`,
+  );
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
@@ -71,6 +95,15 @@ async function main(): Promise<void> {
         "",
       ].join("\n"),
     );
+    return;
+  }
+
+  // T-4.10 E2E mode short-circuit. Must run BEFORE discovery so the harness
+  // never writes to a real claude-bridge config. The env-var branch is the
+  // only difference between production and E2E boot — see T-4.10 §3.1.
+  const e2eFixturePath = process.env.MEETING_COPILOT_E2E_FIXTURE_PATH;
+  if (e2eFixturePath !== undefined && e2eFixturePath !== "") {
+    await startE2EServer(e2eFixturePath);
     return;
   }
 
