@@ -18,6 +18,7 @@ pub mod context;
 pub mod embed_http;
 pub mod mcp_rpc;
 pub mod repo;
+pub mod setup_install;
 
 pub use auth::{AuthError, Clock as AuthClock, TokenStore, TOKEN_TTL};
 pub use bridge::{
@@ -36,6 +37,11 @@ pub use mcp_rpc::{
 pub use repo::{
     AnswerRow, ContextSourceRow, MeetingRow, MeetingSnapshot, QuestionRow, Repo, RepoError,
     TranscriptChunkRow,
+};
+pub use setup_install::{
+    build_manual_install_url, detect_brew_path, install_via_brew, FilesystemCheck, InstallError,
+    InstallReport, ProcessOutput, ProcessRunner, RealFilesystem, RealProcessRunner,
+    BREW_INSTALL_ARGS, BREW_PATH_APPLE_SILICON, BREW_PATH_INTEL, MANUAL_INSTALL_URL,
 };
 
 pub fn ping() -> &'static str {
