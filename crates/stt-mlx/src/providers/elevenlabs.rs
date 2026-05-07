@@ -130,6 +130,18 @@ pub struct ElevenLabsAdapter {
     session_base_ts_ms: Option<u64>,
 }
 
+// Manual `Debug` — `Sock` (`tungstenite::WebSocket<MaybeTlsStream<TcpStream>>`) is a
+// foreign type without a `Debug` impl. Elide the live socket; report only its presence.
+impl std::fmt::Debug for ElevenLabsAdapter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ElevenLabsAdapter")
+            .field("config", &self.config)
+            .field("socket", &self.socket.as_ref().map(|_| "<connected>"))
+            .field("session_base_ts_ms", &self.session_base_ts_ms)
+            .finish()
+    }
+}
+
 impl ElevenLabsAdapter {
     /// Construct an adapter. Validates the API key but does NOT connect — the socket
     /// is opened lazily on the first `transcribe_chunk` call. Matches the Deepgram

@@ -30,7 +30,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-uti
 # binary entrypoint (Phase 4.x) builds the `Router` from `EmbedState` and
 # binds it to `127.0.0.1:7411` — loopback-only.
 axum = "0.7"
-tower = "0.4"
+tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["cors", "set-header"] }
 futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }

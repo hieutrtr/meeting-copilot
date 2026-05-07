@@ -13,6 +13,7 @@ use crate::source::{i16_to_f32, AudioError, AudioSource, PcmChunk};
 ///
 /// Read into memory eagerly (Phase 1 fixtures are short — typically < 10 s);
 /// streaming-read of multi-minute files is a Phase 1.x optimization.
+#[derive(Debug)]
 pub struct WavFileSource {
     samples: Vec<f32>,
     sample_rate: u32,

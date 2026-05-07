@@ -60,7 +60,11 @@ pub enum SttError {
 /// Object-safe trait for any STT engine. `Box<dyn SttProvider>` compiles + is `Send` so the
 /// helper-daemon can hold the active provider behind a `Mutex<Box<dyn SttProvider>>` and
 /// hot-swap it (Phase 3 T-3.1) without restarting the meeting.
-pub trait SttProvider: Send {
+///
+/// `Debug` supertrait lets `Result<Box<dyn SttProvider>, _>` be used with `expect_err`
+/// in factory tests (T-3.1 / T-3.2 / T-3.4) — adapters with non-Debug socket fields
+/// (Deepgram, ElevenLabs) provide a manual `impl Debug` that elides the live socket.
+pub trait SttProvider: Send + std::fmt::Debug {
     fn name(&self) -> &'static str;
     fn transcribe_chunk(&mut self, chunk: &PcmChunk) -> Result<Vec<SttSegment>, SttError>;
 }
@@ -68,6 +72,7 @@ pub trait SttProvider: Send {
 /// Deterministic in-process STT for tests and dev-time UI demos. Returns one fixed-text
 /// segment per chunk with `confidence = Some(1.0)`. Used by T-1.6 / T-1.9 / T-1.13 tests
 /// to avoid the MLX subprocess on CI.
+#[derive(Debug)]
 pub struct FakeStt {
     pub fixed_text: String,
 }

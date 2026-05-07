@@ -69,6 +69,7 @@ impl Default for MlxConfig {
     }
 }
 
+#[derive(Debug)]
 pub struct MlxWhisperSubprocess {
     config: MlxConfig,
     script_path: PathBuf,
@@ -276,7 +277,7 @@ impl SttProvider for MlxWhisperSubprocess {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use audio_capture::WavFileSource;
+    use audio_capture::{AudioSource, WavFileSource};
 
     fn unique_work_dir(label: &str) -> PathBuf {
         // Process-id + nano-timestamp + label keeps tests parallel-safe.
