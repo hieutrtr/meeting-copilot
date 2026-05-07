@@ -401,6 +401,84 @@ Dashboard (claude-bridge-dashboard) thêm tab "Meeting" hiển thị iframe `htt
 
 ---
 
+### 9.5 Phase 4 update — MCP server impl pointer (T-4.2..T-4.7)
+
+> Append-only addendum landed in Phase 4 (`docs/tasks/phase-4/T-4.2` … `T-4.7`). The §9.1–§9.4 wording above is the canonical design reference; this block describes where the runtime code lives and the closed contract that ships in v1.0.
+
+**Stdio MCP binary:**
+
+- `src/mcp/bin.ts` — entrypoint registered in `package.json#bin` as `meeting-copilot-mcp`. Run via `bun run mcp-server`.
+- `src/mcp/server.ts` — `buildServer()` + `startStdioServer()` factory. The same `buildServer` is reused by `src/mcp/server.test.ts` over `InMemoryTransport` and by the T-4.10 E2E harness over `StdioClientTransport`.
+- `src/mcp/tools.ts` — single source of truth for `TOOL_NAMES`, the 5 Zod input/output schemas, the closed `ERROR_CODES` set, and the `TOOL_DEFINITIONS` array consumed by `tools/list`.
+- SDK pin: `@modelcontextprotocol/sdk ^1.0.0` (matches the claude-bridge daemon's `package.json` pin — verified in `src/mcp/tools.test.ts`).
+
+**Handler modules** (each exposes `handle<X>(args, deps)` with dependency injection for fakes):
+
+| Tool | Handler | Phase 4 task |
+|---|---|---|
+| `bridge_meeting_install` | `src/mcp/handlers/install.ts` | T-4.3 |
+| `bridge_meeting_start`   | `src/mcp/handlers/start.ts` + `src/mcp/deeplink.ts` | T-4.4 |
+| `bridge_meeting_status`  | `src/mcp/handlers/status.ts` + `src/mcp/socket.ts` | T-4.5 |
+| `bridge_meeting_stop`    | `src/mcp/handlers/stop.ts` (re-uses `socket.ts`) | T-4.6 |
+| `bridge_meeting_export`  | `src/mcp/handlers/export.ts` + `src/mcp/exporters/{markdown,json,vtt,srt}.ts` | T-4.7 |
+
+**Error envelope (closed set):** every handler returns `{isError: true, content: [{type:"text", text: "<ErrorCode>: <message>"}]}` where `<ErrorCode>` ∈ `ERROR_CODES = ["NotImplemented", "PrivacyModeViolation", "DeeplinkNotRegistered", "ContextNotFound", "MeetingNotFound", "InvalidMeetingId", "ConfigSchemaUnsupported", "BridgeConfigInvalid"]` (frozen in `src/mcp/tools.ts`). Adding a code requires updating that array AND the relevant handler test.
+
+**Telemetry hook (cross-ref §14):** handlers emit through the existing opt-in `src/telemetry/telemetryLog.ts` sink. No transcript / audio / API-key bytes ever flow through MCP — the scrubber's `FORBIDDEN_KEYS` audit ran in each `T-4.<N>-review.md`.
+
+**Test coverage delta (Phase 4 net new):** ~211 vitest tests across `src/mcp/{server,tools,deeplink,socket,e2eHarness}.test.ts`, `src/mcp/handlers/*.test.ts`, `src/mcp/exporters/*.test.ts`, plus 5 E2E scenarios in `tests/e2e/mcp-dispatch.e2e.test.ts`. Full suite at T-4.10 sign-off: 57 files / 900 tests / 0 fail.
+
+---
+
+### 9.6 Phase 4 update — Deeplink scheme + spawn safety (T-4.4)
+
+> Append-only addendum. The §9.2 `bridge_meeting_start` paragraph above stays the canonical reference for the tool input/output shape; this block describes how Phase 4 enforces spawn safety.
+
+**URL scheme:** `meeting-copilot://` declared in `src-tauri/tauri.conf.json` (under `tauri-plugin-deep-link.desktop.schemes`). Cargo-side handler wiring (`commands::start_from_deeplink`) is **deferred to host** per `docs/tasks/phase-4/T-4.4-manual-verify-deeplink.md` — the loop sandbox lacks Xcode CLT, so the Tauri Info.plist verification + first-launch deeplink registration is documented as a manual step.
+
+**Pure URL builder:** `src/mcp/deeplink.ts` builds the deeplink **only** via `URLSearchParams` — no string concatenation, ever. 13 R-2 injection vectors covered in `src/mcp/deeplink.test.ts` (path traversal, single quotes, ampersands, semicolons, backticks, etc.). All percent-encode safely.
+
+**Spawn invocation:** `child_process.spawn("open", [deeplink], { shell: false })` — array argv, never shell string. Mocked-spawn test asserts the command + argv shape.
+
+**Two pre-spawn gates (BLOCKING per INDEX R-2 review checkbox):**
+
+1. **Path-traversal guard** on every `contextPaths[]` string — `..` segments, absolute-path-with-traversal, NUL bytes, etc., reject with `ContextNotFound` typed envelope **before** the URL is built.
+2. **Privacy mode gate** via `isSttProviderAllowed(privacyMode, sttProvider)` from `src/privacy/privacyMode.ts` (Phase 3 T-3.8 carry-forward). E.g. `(local-first, deepgram)` → `PrivacyModeViolation` typed envelope; spawn-spy count = 0 in the test gate. The same gate lives in Rust at `crates/stt-mlx/src/providers/privacy.rs` for the in-app surface; the MCP layer mirrors it pre-spawn so the constraint cannot be bypassed by skipping the UI picker.
+
+**Failure mode:** if the deeplink is not yet registered (first-launch race), `open` returns non-zero and the handler surfaces a typed `DeeplinkNotRegistered` error — `src/mcp/handlers/start.ts` does not panic.
+
+---
+
+### 9.7 Phase 4 update — Embed CORS + token TTL (T-4.9)
+
+> Append-only addendum. The §9.4 paragraph above stays the canonical design reference for the iframe + auth idea; this block describes the Phase 4 implementation of the HTTP layer.
+
+**Helper-daemon Axum router:** `crates/helper-daemon/src/embed_http.rs` binds `127.0.0.1:7411`. Two routes:
+
+- `GET /embed/transcript/:meetingId?token=…` → static HTML shell (built by Vite from `src/embed/transcript-entry.tsx` into `dist/embed/transcript.html`).
+- `GET /embed/transcript/:meetingId/events?token=…` → SSE stream wrapping a `tokio::sync::broadcast::Receiver<EmbedEvent>` via `futures_util::stream::unfold`. `Lagged` tolerated; `Closed` terminates.
+
+**CORS allow-list = `http://127.0.0.1:7878` only** (claude-bridge dashboard default port). **Hardcoded; no wildcard ever.** Wildcard-veto + wrong-port + wrong-scheme test cases ship in `embed_http.rs` `#[tokio::test]` block (R-3 BLOCKING — privacy regression risk).
+
+**Auth = single-use UUID token** minted by helper daemon at `bridge_meeting_start` time, scoped to a single `meetingId`, **5-minute TTL.**
+
+- Mint/verify in `crates/helper-daemon/src/auth.rs`. `Clock` dependency injected for deterministic TTL boundary tests (asserted at exact + 1ns).
+- Token ≠ session — re-using the token across `meetingId` scopes returns 401 (scope mismatch test).
+
+**Headers on every response (200 / 401 / 403 paths):** `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, `X-Frame-Options: SAMEORIGIN`. Tested per response code.
+
+**TS-side iframe component:** `src/embed/TranscriptEmbed.tsx` consumes the SSE stream via `EventSource`. RTL test in `src/embed/TranscriptEmbed.test.tsx` covers `connect → event → error → unmount` lifecycle with a mocked `EventSource`.
+
+**Out of scope for Phase 4 (deferred):**
+
+- Helper-daemon out-of-process **binary** entrypoint (consumes `EmbedState::register_channel` / `deregister_channel`) — Phase 4.x deferred. Rust tests today exercise the `Router` directly via `axum::ServiceExt::oneshot`.
+- WebSocket upgrade for sub-100ms event fanout — SSE is sufficient for v1.0 latency budget (§12).
+- Per-meeting iframe `<TranscriptEmbed/>` + `<AnswerPanelEmbed/>` composition — v1.0 ships transcript only; answer panel embed is a v1.x candidate.
+
+**Test coverage delta:** 11 `auth.rs` `#[test]` cases + 14 `embed_http.rs` `#[tokio::test]` cases (Rust, ship code-complete pending host cargo verify per Phase 0 carry-forward) + 21 vitest cases for `<TranscriptEmbed/>`.
+
+---
+
 ## 10. Data Model
 
 ```
@@ -607,6 +685,85 @@ A thin seam that wires the meter into the existing Phase 1 T-1.6 `transcript:chu
 ### 15.4 UI
 
 Cost-meter UI surfaces both **session-cumulative** and **projected $/h** in the Settings sheet sidebar. The Phase 2 `costGuard` threshold logic is reused — no new threshold semantics.
+
+---
+
+## 16. Discovery — `~/.claude-bridge/config.json` (Phase 4, T-4.8)
+
+> NEW section landed in Phase 4. Discovery was design-noted in §9.1 (pre-implementation); this section reports the runtime contract. The §9.1 paragraph above stays the canonical "what config.json looks like at the conceptual level" — this block describes the Zod schema slice meeting-copilot owns and the writer-side guarantees.
+
+### 16.1 Schema slice (single source of truth: `src/discovery/schema.ts`)
+
+meeting-copilot reads + writes a slice of the daemon-owned `~/.claude-bridge/config.json`:
+
+- **Top-level `version: number`** — must be `1`. Values `> 1` are rejected with the typed `ConfigSchemaUnsupported` error. Bumping `SUPPORTED_CONFIG_VERSION` is a breaking change.
+- **Top-level `meeting_copilots: Array<MeetingCopilotEntry>`** — owned by meeting-copilot.
+- **All other top-level keys** (`daemon`, `dashboards`, `channels`, …) — preserved on round-trip via Zod `.passthrough()`. **Critical:** the daemon and meeting-copilot are concurrent writers of the same JSON file, each owning a disjoint set of keys. If either side strips an unknown key during a write, the other side's state is destroyed.
+
+**Per-entry shape** (also `.passthrough()`):
+
+```ts
+MeetingCopilotEntry = {
+  version: string;            // semver of the installed Meeting Copilot.app
+  path: string;               // absolute filesystem path; tilde expansion REJECTED
+  default?: boolean;          // is this the default copilot (only one default at a time)
+  installed_at?: string;      // ISO 8601 — written at first register
+  installed_from?: string;    // provenance hint, e.g. "github.com/anthropic/meeting-copilot@v1.0.0"
+  mcp_bin?: string;           // absolute path to meeting-copilot-mcp binary
+  // …unknown keys preserved verbatim
+}
+```
+
+### 16.2 Reader / writer (`src/discovery/bridgeConfig.ts`)
+
+- **Env override:** `CLAUDE_BRIDGE_HOME` (default `~/.claude-bridge`). Tilde-prefixed and `..`-containing path inputs are rejected with `BridgeConfigInvalid` — no tilde expansion (per claude-bridge daemon `dashboard-installer.ts` convention: absolute paths only).
+- **Atomic write:** `writeFileSync(<config>.tmp, …)` then `renameSync(.tmp, .)` — same pattern as the daemon.
+- **Idempotency:** existing entry with matching `path` is updated in-place; if no field changed, the writer returns `{ alreadyRegistered: true }` and **skips the file write entirely**. Re-register asserts atomic-write call count = 0 in the test gate.
+- **Boot-time hook:** `src/mcp/bin.ts` wraps the registration call in `try/catch` so MCP server boot never crashes on a discovery failure. A corrupt config logs the error and continues — production callers can still drive the MCP surface even if `config.json` is unreadable.
+
+### 16.3 Example `~/.claude-bridge/config.json`
+
+```jsonc
+{
+  "version": 1,
+  "daemon": {
+    "version": "1.0.4",
+    "db_path": "~/.claude-bridge/bridge.db",
+    "socket": "~/.claude-bridge/daemon.sock",
+    "mcp_endpoint": "stdio",
+    "compat_range": ">=0.7.0 <2.0.0"
+  },
+  "dashboards": [],
+  "meeting_copilots": [
+    {
+      "version": "1.0.0",
+      "path": "/Applications/Meeting Copilot.app",
+      "default": true,
+      "installed_at": "2026-05-07T12:34:56Z",
+      "installed_from": "github.com/anthropic/meeting-copilot@v1.0.0",
+      "mcp_bin": "/Applications/Meeting Copilot.app/Contents/Resources/meeting-copilot-mcp"
+    }
+  ]
+}
+```
+
+The snippet round-trips through `BridgeConfigSchema.safeParse(JSON.parse(...))` with `success: true` (verified during T-4.11 sign-off).
+
+### 16.4 Failure modes
+
+| Condition | Error code | Where it fires |
+|---|---|---|
+| `config.version > 1` | `ConfigSchemaUnsupported` | `bridgeConfig.ts` parse step |
+| Tilde-prefixed `path` | `BridgeConfigInvalid` | `bridgeConfig.ts` write step |
+| `..` in `path` | `BridgeConfigInvalid` | `bridgeConfig.ts` write step |
+| Corrupt JSON | `BridgeConfigInvalid` | `bridgeConfig.ts` parse step |
+| Missing file | (silent — atomic create) | `bridgeConfig.ts` write step |
+
+### 16.5 Out of scope for Phase 4 (deferred)
+
+- **Live config reload** — meeting-copilot reads `config.json` at boot only; daemon-side updates require a restart. Live reload is a Phase 4.x candidate.
+- **Multi-default detection** — `default: true` is honored as a hint; the daemon enforces single-default. meeting-copilot does not police it.
+- **`installed_from` URL fetch** — present-but-unused field today (provenance hint only). GitHub install-from-URL is a Phase 4.x candidate (see also T-4.3 install handler).
 
 ---
 
