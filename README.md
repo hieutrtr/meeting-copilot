@@ -25,7 +25,10 @@ bun install
 cargo install tauri-cli   # nếu chưa có
 
 # 2. Cài audio loopback driver (cho system audio capture)
-brew install blackhole-2ch
+#    → Recommended: chạy app rồi để in-app Setup Wizard xử lý tự động.
+#    → Manual: see docs/SETUP.md để cài bằng Homebrew, .pkg trực tiếp, hoặc
+#      Audio MIDI Setup. Bao gồm troubleshooting + screenshot stubs cho mỗi bước.
+brew install --cask blackhole-2ch
 # Hoặc dùng Loopback.app (paid, friendlier UI)
 
 # 3. Tải MLX Whisper model (~600MB, large-v3-turbo q4)
