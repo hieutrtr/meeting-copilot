@@ -1,7 +1,8 @@
 # Meeting Copilot
 
-> Trạng thái: Planning · Owner: Hieu · Last updated: 2026-05-05
-> Tài liệu: [PRD](docs/PRD.md) · [ARCHITECTURE](docs/ARCHITECTURE.md) · [IMPLEMENTATION-PLAN](docs/IMPLEMENTATION-PLAN.md)
+> Trạng thái: **v1.0.1 — ✅ VERIFIED** (post-fix-loop, 2026-05-07) · Owner: Hieu · Last updated: 2026-05-08
+> Tests: **231 cargo + 952 vitest** passing on `aarch64-apple-darwin` · BlackHole Setup Wizard verified 2026-05-07
+> Tài liệu: [PRD](docs/PRD.md) · [ARCHITECTURE](docs/ARCHITECTURE.md) · [IMPLEMENTATION-PLAN](docs/IMPLEMENTATION-PLAN.md) · [SETUP](docs/SETUP.md) · [PHASE-COMPLETE](docs/tasks/blackhole-wizard/PHASE-COMPLETE.md)
 
 ## Vision
 
@@ -13,46 +14,61 @@ Meeting Copilot tích hợp với **claude-bridge** qua MCP tool: bot Telegram c
 
 ## Quickstart
 
-> ⚠️ Repo đang ở giai đoạn planning. Quickstart bên dưới là *placeholder* mô tả UX dự kiến cho Phase 1 MVP.
+Chọn **1 trong 3 path** tuỳ mục đích — tất cả đều share BlackHole 2ch + Multi-Output Device requirement (Setup Wizard tự handle trong-app).
+
+### Pre-flight checklist (cho mọi path)
+
+- [ ] macOS Apple Silicon hoặc Intel + macOS 13+ (Ventura trở lên)
+- [ ] [Homebrew](https://brew.sh) đã cài (wizard dùng để auto-install BlackHole; manual `.pkg` cũng hoạt động nếu thiếu brew)
+- [ ] API key cho **ít nhất 1 STT provider**:
+  - `ANTHROPIC_API_KEY` (bắt buộc — cho Q/A answer generation), **VÀ**
+  - một trong: `DEEPGRAM_API_KEY` *hoặc* `ELEVENLABS_API_KEY` (cho cloud STT) *hoặc* MLX Whisper model (cho local STT — `bun run download-model`)
+- [ ] Sẵn sàng grant **Microphone** permission (TCC modal sẽ hiện trong wizard's Verify step — gồm cả BlackHole loopback input)
+- [ ] (chỉ Path C) `claude-bridge` daemon **v1.0.4+** đã cài + đang chạy
+
+### Path A — Dev mode (`bun run tauri dev`)
+
+Khi bạn build / hack trên codebase. Không cần DMG, không cần notarize, nhưng **vẫn cần BlackHole trên host** để Verify step pass.
 
 ```bash
-# Yêu cầu: macOS Apple Silicon, Bun ≥ 1.1, Rust toolchain (cho Tauri)
-
-# 1. Cài đặt
+# Yêu cầu: Bun ≥ 1.1, Rust toolchain (cargo 1.95+ / rustc 1.95+), Tauri CLI
 git clone https://github.com/<org>/meeting-copilot
 cd meeting-copilot
 bun install
 cargo install tauri-cli   # nếu chưa có
 
-# 2. Cài audio loopback driver (cho system audio capture)
-#    → Recommended: chạy app rồi để in-app Setup Wizard xử lý tự động.
-#    → Manual: see docs/SETUP.md để cài bằng Homebrew, .pkg trực tiếp, hoặc
-#      Audio MIDI Setup. Bao gồm troubleshooting + screenshot stubs cho mỗi bước.
-brew install --cask blackhole-2ch
-# Hoặc dùng Loopback.app (paid, friendlier UI)
-
-# 3. Tải MLX Whisper model (~600MB, large-v3-turbo q4)
+# (Optional) tải MLX Whisper model nếu dùng local STT (~600MB, large-v3-turbo q4)
 bun run download-model
 
-# 4. Chạy dev
+# Chạy dev — wizard auto-mount lần đầu launch nếu setupCompleted=false
 bun run tauri dev
-
-# 5. Trong app:
-#    - Click "New Meeting" → chọn audio source (System + Mic)
-#    - "Add Context" → chọn PRDs / code files / paste URLs
-#    - "Start Recording" → meeting bắt đầu, transcript live
-#    - Câu hỏi auto-detect hiện ở panel phải, kèm answer
 ```
 
-Cài đặt qua claude-bridge (Phase 4):
+### Path B — Production install (DMG)
+
+Dành cho end-user. Cần **build + notarize** trên release pipeline (xem `docs/release/DMG-INSTRUCTIONS.md`), rồi **drag `Meeting Copilot.app` vào `/Applications`**.
 
 ```bash
-# Trong bot Telegram
-"Cài meeting copilot version mới nhất"
-# → bridge_meeting_install({ version: "latest" }) chạy ngầm
-# → Đăng ký agent name: meeting-copilot
-# → Sau đó: bridge_meeting_start({ contextPaths: [...], sttProvider: "mlx" })
+# Trong app dir, sau khi notarized:
+open Meeting\ Copilot-1.0.1.dmg
+# Drag vào /Applications, right-click → Open lần đầu để Gatekeeper accept signed DMG
+# Wizard auto-mount; thực hiện 5 step (Welcome → Detect → Install → Configure → Verify → Done)
 ```
+
+### Path C — Via claude-bridge (Telegram)
+
+Dành cho remote orchestration qua bot Telegram. Yêu cầu **claude-bridge daemon ≥ 1.0.4** đang chạy + `~/.claude-bridge/config.json` đã có entry `meeting_copilots[]` (boot `bun run mcp-server` 1 lần để self-register — xem [§Install + register](#install--register) bên dưới).
+
+```bash
+# Trong bot Telegram:
+"Cài meeting copilot version mới nhất"
+# → bridge_meeting_install({}) — kiểm tra app đã ở /Applications chưa
+# Sau đó:
+"Bắt đầu meeting với context PRD.md, dùng MLX local"
+# → bridge_meeting_start({ contextPaths: [...], sttProvider: "mlx" })
+```
+
+> 💡 **Wizard fail?** Toàn bộ steps có **manual fallback**. Xem [`docs/SETUP.md` §6 Troubleshooting](docs/SETUP.md#6-troubleshooting) — covers 6 failure modes (BlackHole not found, silent transcript, TCC denied, brew fail, transient device after reboot, brew prefix mismatch) + Audio MIDI Setup manual flow.
 
 > 📚 Chi tiết về MCP surface (5 tool, error envelope, deeplink, embed iframe, discovery): xem [§MCP Integration with claude-bridge](#mcp-integration-with-claude-bridge) bên dưới + [`docs/mcp-tools.md`](docs/mcp-tools.md).
 
@@ -85,11 +101,21 @@ See [`docs/mcp-tools.md`](docs/mcp-tools.md) for the full reference (Zod schemas
 
 ### Install + register
 
+> ⚠️ **claude-bridge daemon schema check (BEFORE `bun run mcp-server`)**
+>
+> Self-register chỉ hoạt động nếu `~/.claude-bridge/config.json` đã ở **schema v1+** (có key `daemon.version`). Nếu file còn schema cũ (chỉ có top-level `telegram_bot_token` / `telegram_chat_id` / `bot_dir`), `mcp-server` sẽ reject với `ConfigSchemaUnsupported` hoặc `BridgeConfigInvalid`. Chạy lệnh sau để check trước:
+>
+> ```bash
+> jq -e '.daemon.version' ~/.claude-bridge/config.json || echo "schema cần upgrade — install/run claude-bridge daemon ≥ 1.0.4 trước"
+> ```
+>
+> Nếu output là `"schema cần upgrade"`, install claude-bridge daemon **v1.0.4+** và boot daemon 1 lần (nó tự migrate schema), rồi quay lại bước 3 dưới.
+
 ```bash
 # 1. Install Meeting Copilot.app to /Applications (DMG flow — release notarization
-#    instructions land alongside the v1.0 release; see docs/release/ once published).
+#    instructions land alongside the v1.0.1 release; see docs/release/ once published).
 
-# 2. Ensure ~/.claude-bridge exists (claude-bridge daemon creates it on first run).
+# 2. Ensure ~/.claude-bridge exists (claude-bridge daemon ≥ 1.0.4 creates it on first run).
 
 # 3. Boot the MCP server once to self-register:
 bun run mcp-server &
@@ -117,11 +143,11 @@ cat ~/.claude-bridge/config.json | jq '.meeting_copilots'
   "dashboards": [],
   "meeting_copilots": [
     {
-      "version": "1.0.0",
+      "version": "1.0.1",
       "path": "/Applications/Meeting Copilot.app",
       "default": true,
       "installed_at": "2026-05-07T12:34:56Z",
-      "installed_from": "github.com/anthropic/meeting-copilot@v1.0.0",
+      "installed_from": "github.com/anthropic/meeting-copilot@v1.0.1",
       "mcp_bin": "/Applications/Meeting Copilot.app/Contents/Resources/meeting-copilot-mcp"
     }
   ]
@@ -173,11 +199,26 @@ These three flows are the ones exercised end-to-end by `tests/e2e/mcp-dispatch.e
 - **Embed iframe origin allow-list = `http://127.0.0.1:7878` only** (claude-bridge dashboard default port). Hardcoded; no wildcard ever. Auth is a single-use UUID token scoped to one `meetingId` with a 5-minute TTL. Headers `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, and `X-Frame-Options: SAMEORIGIN` are set on every response. See ARCH §9.7.
 - **No transcript bytes ever leave the MCP layer.** Tool responses are structured envelopes only (meetingId, durations, counts, file paths). Telemetry is opt-in and scrubbed against a fixed `FORBIDDEN_KEYS` list — `text`, `transcript`, `pcm`, `audio`, `apiKey`, `key`, `secret`, `token`, `password` (Phase 3 T-3.9 carry-forward).
 
+## What's verified in this release (v1.0.1)
+
+Snapshot at sign-off commit `1120024` (post-fix-loop, 2026-05-07). Authoritative sign-off: [`docs/tasks/blackhole-wizard/PHASE-COMPLETE.md`](docs/tasks/blackhole-wizard/PHASE-COMPLETE.md).
+
+- ✅ **Code path** — `cargo test --workspace` **231 / 231** trên `aarch64-apple-darwin` (`cargo 1.95.0` / `rustc 1.95.0`); `bun test` **952 / 952** across 60+ files; `bun run typecheck` exits 0.
+- ✅ **T-W.5 Verify FFI body** — `crates/audio-capture/src/verify.rs` real `cpal` impl + `AudioInputProbe` mock seam (commit `d3071f1`). 4 unit tests cover `Verified` / `BlackHolePresentButSilent` / `TimedOutNoCallbacks` / callback-count telemetry.
+- ✅ **T-W.7 App.tsx wizard mount** — 4 `#[tauri::command]` wrappers (`setup_detect_blackhole` / `setup_install_blackhole` / `setup_configure_multi_output` / `setup_verify_capture`) + `settingsStore.setupCompleted` field với `coerceLoaded` zero-fill + conditional render trong `App.tsx`. Commits `b2cbd96` + `4f235b6`.
+- ⚠️ **Real audio capture trên Mac thật** — pending host-side wizard run. Verify-step's `cpal::build_input_stream` requires BlackHole 2ch installed + Multi-Output Device created + microphone TCC granted. Operator owns this per [`PHASE-MANUAL-VERIFY.md`](docs/tasks/blackhole-wizard/PHASE-MANUAL-VERIFY.md) 12-step procedure.
+- ⚠️ **DMG bundle** — chưa build/notarize trên release pipeline. `bun tauri build` + `xcrun notarytool` + Homebrew cask PR đều là operator-owned (cross-ref carry-forward C-G + `docs/release/DMG-INSTRUCTIONS.md`).
+
+Carry-forward blockers (open for operator): **(a)** Apple-Silicon hardware + notarized v1.0.1 bundle, **(b)** `ANTHROPIC_API_KEY` / `DEEPGRAM_API_KEY` / `ELEVENLABS_API_KEY` env vars, **(c)** `claude-bridge` daemon v1.0.4 install + Telegram channel wiring, **(d)** Homebrew cask submission cho v1.0.1 dmg.
+
 ## Documentation
 
 - **[docs/PRD.md](docs/PRD.md)** — Vision, persona, user stories, success metrics, privacy posture, wireframes.
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — System design: audio pipeline, pluggable STT/TTS providers, question detection, context loader với prompt caching, UI framework pick (Tauri vs Electron), MCP integration với claude-bridge, data model, privacy modes, latency + cost budget.
 - **[docs/IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md)** — 5 phase từ spike → MCP integration, atomic task ≤ 1 day, acceptance criteria, risk register, cost estimate.
+- **[docs/SETUP.md](docs/SETUP.md)** — End-user setup guide cho BlackHole + Multi-Output Device. 9 sections gồm wizard walkthrough, manual fallback (brew + `.pkg` + Audio MIDI Setup), troubleshooting (6 failure modes), FAQ.
+- **[docs/mcp-tools.md](docs/mcp-tools.md)** — Reference cho 5 `bridge_meeting_*` MCP tools (Zod schemas, error envelopes, example invocations).
+- **[docs/tasks/blackhole-wizard/PHASE-COMPLETE.md](docs/tasks/blackhole-wizard/PHASE-COMPLETE.md)** — v1.0.1 sign-off (verdict ✅ VERIFIED, 10/10 wizard tasks landed, post-fix-loop audit trail).
 
 ## License
 
